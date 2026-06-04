@@ -1,0 +1,7 @@
+.env
+dashboard.html
+approval.html
+logs/
+__pycache__/
+*.pyc
+.DS_Store
