@@ -486,6 +486,13 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
         '기타':    '#FFFFFF',
     }
 
+    def detect_month(campaigns):
+        for c in campaigns:
+            key = campaign_date_key(c['name'])
+            if key:
+                return str(key[0])
+        return '0'
+
     def detect_category(campaigns):
         for c in campaigns:
             parts = c['name'].strip().split()
@@ -507,6 +514,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
         color = colors[i % len(colors)]
         region_key = f"region_{i}"
         category = detect_category(data['campaigns'])
+        month = detect_month(data['campaigns'])
 
         # 모달 내용 (크리에이티브 + 캠페인 테이블)
         modal_contents[region_key] = f"""
@@ -529,7 +537,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
 
         # 카드 (헤더 + 요약만, 테이블 없음)
         region_sections.append(f"""
-        <div class="region-card" onclick="openModal('{region_key}')" data-category="{category}" style="cursor:pointer;background:{CATEGORY_COLORS[category]}">
+        <div class="region-card" onclick="openModal('{region_key}')" data-category="{category}" data-month="{month}" style="cursor:pointer;background:{CATEGORY_COLORS[category]}">
             <div class="region-header" style="border-left: 4px solid {color}">
                 <div class="region-title">
                     <span class="region-dot" style="background:{color}"></span>
@@ -628,7 +636,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   .region-title h2 {{ font-size: 18px; font-weight: 700; }}
   .camp-count {{ background: #E4E6EB; color: #606770; font-size: 12px; padding: 2px 10px; border-radius: 10px; }}
   .applicant-badge {{ background: #E8F4FD; color: #1877F2; font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 10px; }}
-  .platform-table-wrap {{ padding: 12px 24px; border-bottom: 1px solid #E4E6EB; background: #FAFBFC; }}
+  .platform-table-wrap {{ padding: 12px 24px; border-bottom: 1px solid #E4E6EB; }}
   .platform-table {{ border-collapse: collapse; font-size: 12px; }}
   .platform-table th {{ color: #606770; font-weight: 600; padding: 4px 14px 4px 0; text-align: left; }}
   .platform-table td {{ padding: 4px 14px 4px 0; }}
@@ -651,6 +659,21 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   .ctr-low {{ background: #FCE8E6; color: #C5221F; }}
 
   .section-title {{ font-size: 16px; font-weight: 700; margin-bottom: 16px; color: #1C1E21; }}
+
+  /* 월 셀 */
+  .month-cell {{ text-align:center; padding:6px 4px; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; color:#606770; transition:all 0.15s; }}
+  .month-cell:hover {{ background:#EEF2FF; color:#1877F2; }}
+  .month-cell.selected {{ background:#1877F2; color:white; }}
+
+  /* 커스텀 드롭다운 */
+  .cust-dropdown {{ position:relative; }}
+  .cust-dropdown-btn {{ background:white; border:1px solid #E4E6EB; padding:5px 12px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; color:#1C1E21; display:flex; align-items:center; gap:6px; }}
+  .cust-dropdown-btn:hover {{ border-color:#1877F2; }}
+  .cust-dropdown-menu {{ display:none; position:absolute; top:calc(100% + 4px); right:0; background:white; border:1px solid #E4E6EB; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.12); min-width:120px; z-index:500; overflow:hidden; }}
+  .cust-dropdown-menu.open {{ display:block; }}
+  .cust-dropdown-item {{ padding:9px 16px; font-size:13px; cursor:pointer; color:#1C1E21; }}
+  .cust-dropdown-item:hover {{ background:#F0F2F5; }}
+  .cust-dropdown-item.selected {{ font-weight:700; color:#1877F2; background:#EEF2FF; }}
   .applicant-count {{ font-weight: 700; color: #1877F2; }}
   .applicants-cell {{ white-space: nowrap; }}
 
@@ -751,7 +774,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
       </label>
     </form>
     <form action="/refresh" method="POST" style="margin:0">
-      <button type="submit" class="refresh-btn">🔄 새로고침</button>
+      <button type="submit" class="refresh-btn">📡 메타호출</button>
     </form>
   </div>
 </header>
@@ -792,15 +815,49 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
     </div>
   </div>
 
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
     <div class="section-title" style="margin-bottom:0">지역별 캠페인 상세</div>
-    <select id="categoryFilter" onchange="filterRegions(this.value)" style="padding:6px 12px;border-radius:8px;border:1px solid #E4E6EB;font-size:13px;color:#1C1E21;background:white;cursor:pointer;">
-      <option value="전체">전체</option>
-      <option value="지브리">지브리</option>
-      <option value="뮤지컬">뮤지컬</option>
-      <option value="강연">강연</option>
-      <option value="김창옥">김창옥</option>
-    </select>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <!-- 월별 드롭다운 -->
+      <div class="cust-dropdown" id="monthDropdown">
+        <button class="cust-dropdown-btn" onclick="toggleMonthDropdown()">
+          <span id="monthLabel">기간</span> ▾
+        </button>
+        <div class="cust-dropdown-menu" id="monthMenu" style="min-width:176px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #E4E6EB;">
+            <span style="font-size:11px;font-weight:700;color:#606770;">2026년</span>
+            <div class="month-cell selected" id="monthAllCell" onclick="pickMonth('0',this)" style="padding:3px 10px;font-size:11px;">전체</div>
+          </div>
+          <div style="padding:8px;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+            <div class="month-cell" onclick="pickMonth('1',this)">1월</div>
+            <div class="month-cell" onclick="pickMonth('2',this)">2월</div>
+            <div class="month-cell" onclick="pickMonth('3',this)">3월</div>
+            <div class="month-cell" onclick="pickMonth('4',this)">4월</div>
+            <div class="month-cell" onclick="pickMonth('5',this)">5월</div>
+            <div class="month-cell" onclick="pickMonth('6',this)">6월</div>
+            <div class="month-cell" onclick="pickMonth('7',this)">7월</div>
+            <div class="month-cell" onclick="pickMonth('8',this)">8월</div>
+            <div class="month-cell" onclick="pickMonth('9',this)">9월</div>
+            <div class="month-cell" onclick="pickMonth('10',this)">10월</div>
+            <div class="month-cell" onclick="pickMonth('11',this)">11월</div>
+            <div class="month-cell" onclick="pickMonth('12',this)">12월</div>
+          </div>
+        </div>
+      </div>
+      <!-- 카테고리 커스텀 드롭다운 -->
+      <div class="cust-dropdown" id="catDropdown">
+        <button class="cust-dropdown-btn" onclick="toggleDropdown()">
+          <span id="catLabel">분류</span> ▾
+        </button>
+        <div class="cust-dropdown-menu" id="catMenu">
+          <div class="cust-dropdown-item" onclick="setCategory('전체',this)">전체</div>
+          <div class="cust-dropdown-item" onclick="setCategory('지브리',this)">지브리</div>
+          <div class="cust-dropdown-item" onclick="setCategory('뮤지컬',this)">뮤지컬</div>
+          <div class="cust-dropdown-item" onclick="setCategory('강연',this)">강연</div>
+          <div class="cust-dropdown-item" onclick="setCategory('김창옥',this)">김창옥</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="regions-grid" id="regionsGrid">{''.join(region_sections)}</div>
@@ -1026,12 +1083,51 @@ async function toggleAdStatus(btn) {{
   btn.classList.remove('loading');
 }}
 
-// ── 카테고리 필터 ────────────────────────────────────────────────
-function filterRegions(cat) {{
+// ── 필터 ─────────────────────────────────────────────────────────
+let _cat = '전체', _month = '0';
+
+function applyFilters() {{
   document.querySelectorAll('#regionsGrid .region-card').forEach(card => {{
-    card.style.display = (cat === '전체' || card.dataset.category === cat) ? '' : 'none';
+    const catOk = _cat === '전체' || card.dataset.category === _cat;
+    const monOk = _month === '0' || card.dataset.month === _month;
+    card.style.display = (catOk && monOk) ? '' : 'none';
   }});
 }}
+
+function setCategory(cat, el) {{
+  _cat = cat;
+  document.getElementById('catLabel').textContent = cat === '전체' ? '분류' : cat;
+  document.querySelectorAll('.cust-dropdown-item').forEach(i => i.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('catMenu').classList.remove('open');
+  applyFilters();
+}}
+
+function pickMonth(month, el) {{
+  _month = month;
+  document.getElementById('monthLabel').textContent = month === '0' ? '기간' : month + '월';
+  document.querySelectorAll('.month-cell').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('monthMenu').classList.remove('open');
+  applyFilters();
+}}
+
+function toggleMonthDropdown() {{
+  document.getElementById('monthMenu').classList.toggle('open');
+  document.getElementById('catMenu').classList.remove('open');
+}}
+
+function toggleDropdown() {{
+  document.getElementById('catMenu').classList.toggle('open');
+  document.getElementById('monthMenu').classList.remove('open');
+}}
+
+document.addEventListener('click', e => {{
+  if (!document.getElementById('catDropdown').contains(e.target))
+    document.getElementById('catMenu').classList.remove('open');
+  if (!document.getElementById('monthDropdown').contains(e.target))
+    document.getElementById('monthMenu').classList.remove('open');
+}});
 
 // ── 차트 ────────────────────────────────────────────────────────
 const labels = {chart_labels};

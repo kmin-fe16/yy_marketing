@@ -9,16 +9,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ADMIN_URL = "https://yeoyoutalk.kr/abcadmin"
-ADMIN_ID = os.getenv("YEYOUTALK_ID")
-ADMIN_PW = os.getenv("YEYOUTALK_PW")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 def login():
-    if not ADMIN_ID or not ADMIN_PW:
+    admin_id = os.getenv("YEYOUTALK_ID")
+    admin_pw = os.getenv("YEYOUTALK_PW")
+    if not admin_id or not admin_pw:
         raise RuntimeError(".env 파일에 YEYOUTALK_ID와 YEYOUTALK_PW를 입력하세요.")
     session = requests.Session()
     resp = session.post(
         f"{ADMIN_URL}/login_ok.asp",
-        data={"str_id": ADMIN_ID, "str_pw": ADMIN_PW},
+        data={"str_id": admin_id, "str_pw": admin_pw},
         headers=HEADERS, timeout=10,
     )
     if "등록되지 않은" in resp.text:
