@@ -2,7 +2,7 @@ import requests
 import json
 import re
 import os
-from datetime import date as date_cls
+from datetime import date as date_cls, datetime, timezone
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
@@ -10,8 +10,8 @@ from scrape_applicants import login as yy_login, get_active_events, count_applic
 
 load_dotenv()
 
-ACCESS_TOKEN = "EAAcS3syXjtcBRqFui6iZBybqqcUYJmjQQCZCSy9zFUY3KN0JRtivnEdRmnmbchMKr4O3j03FIRvVqmZCRtklJ5ijGODGlIZBteZCoGTyf74Pkh8GJ0SXlGIW65r2QW0Ifs6njWqvIjqwU1DfJ6lasdxkLnbeaIuOvo5cVrDZAkufu47dOs8ZC5TZBk1svQnZCqMg2cdOzgYX2C19d4ZBtZAef8j"
-AD_ACCOUNT_ID = "act_810493558680773"
+ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+AD_ACCOUNT_ID = os.getenv("META_AD_ACCOUNT_ID", "act_810493558680773")
 API_VERSION = "v20.0"
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
 
@@ -45,7 +45,7 @@ def get_all_active_ads():
     url = f"{BASE_URL}/{AD_ACCOUNT_ID}/ads"
     params = {
         "fields": (
-            "id,name,status,campaign_id,"
+            "id,name,status,campaign_id,created_time,"
             "creative{thumbnail_url},"
             "insights.time_range({'since':'2026-01-01','until':'2026-12-31'}){ctr,cpm,spend,impressions,clicks}"
         ),
@@ -246,75 +246,128 @@ async function approveCampaign(id, btn) {{
 </html>"""
 
 
-def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, pending_campaigns=None):
+def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, pending_campaigns=None, dry_run_alerts=None, upload_complete=None, pending_upload=None):
     colors = ["#4F86C6", "#E07B54", "#5BAD6F", "#9B5EA2", "#D4A843",
               "#E05C87", "#43A8A8", "#8B7355", "#6B7A8D", "#C96B6B"]
 
-    # ── 승인 대기 섹션 (노션 연결 전: 목업 데이터 / 연결 후: 실제 데이터) ──
-    MOCK_PENDING = [
-        {
-            "공연명": "7/5 부산 벡스코",
-            "공연일": "2026-07-05",
-            "지역": "부산",
-            "일예산": 50000,
-            "연령대": ["40대", "50대"],
-            "광고제목": "여유톡 7월 부산 공연",
-            "에셋A": "",
-            "에셋B": "",
-            "에셋C": "",
-            "캠페인ID": "MOCK_ID_001",
-        },
-        {
-            "공연명": "7/12 대전 ICC",
-            "공연일": "2026-07-12",
-            "지역": "대전",
-            "일예산": 40000,
-            "연령대": ["40대", "50대"],
-            "광고제목": "여유톡 7월 대전 공연",
-            "에셋A": "",
-            "에셋B": "",
-            "에셋C": "",
-            "캠페인ID": "MOCK_ID_002",
-        },
-    ]
-    pending = pending_campaigns if pending_campaigns is not None else MOCK_PENDING
-
-    def approval_card(p):
-        assets = [(p.get("에셋A",""), "A"), (p.get("에셋B",""), "B"), (p.get("에셋C",""), "C")]
-        asset_count = sum(1 for url, _ in assets if url)
-        thumbs = "".join(
-            f'<img class="pending-thumb" src="{url}" onerror="this.style.background=\'#E4E6EB\';this.src=\'\';">'
-            if url else '<div class="pending-thumb pending-thumb-empty"></div>'
-            for url, label in assets
+    # ── 업로드 실패 알람 (자동 업로드 실패한 건만 표시) ─────────────────
+    pending = pending_upload or []
+    if pending:
+        chips = "".join(
+            f'<span class="notif-chip">{p.get("공연명","")}</span>'
+            for p in pending
         )
-        age_str = "/".join(p.get("연령대", ["40대", "50대"]))
-        is_mock = p["캠페인ID"].startswith("MOCK")
-        btn_text = "🔒 목업 (연결 후 활성화)" if is_mock else "🚀 승인 (ACTIVE 전환)"
-        btn_disabled = "disabled" if is_mock else ""
-        return f"""
-        <div class="pending-card">
+        notif_block_html = f"""
+  <div class="task-block notif-block">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="notif-dot"></span>
+        <span class="task-label" style="background:#C62828;color:white;border-radius:6px;padding:2px 10px;font-size:12px;font-weight:700;">업로드 실패</span>
+        <span class="task-badge" style="background:#FFEBEE;color:#C62828;">{len(pending)}건</span>
+        {chips}
+      </div>
+      <a href="/ad-setup" class="notif-goto-btn" style="background:#C62828;">⚙️ 세팅탭에서 수동 업로드 →</a>
+    </div>
+  </div>"""
+    else:
+        notif_block_html = ""
+
+    # ── A작업: 업로드완료 → ACTIVE 전환 대기 ────────────────────────────
+    a_camps = upload_complete or []
+
+    def a_card(p):
+        age_str = "/".join(p.get("연령대") or ["40대", "50대"])
+        cid = p.get("캠페인ID", "")
+        pid = p.get("page_id", "")
+        return f"""<div class="pending-card">
             <div class="pending-name">{p['공연명']}</div>
             <div class="pending-meta">
-                <span>📅 {p['공연일']}</span>
-                <span>📍 {p['지역']}</span>
-                <span>💰 ₩{int(p['일예산']):,}/일</span>
-                <span>👥 {age_str} 여성</span>
+                <span>📅 {p.get('공연일','')}</span>
+                <span>📍 {p.get('지역','')}</span>
+                <span>💰 ₩{int(p.get('일예산',0)):,}/일</span>
+                <span>👥 {age_str} {p.get('성별','여성')}</span>
             </div>
-            <div class="pending-title">📝 {p['광고제목']}</div>
-            <div class="pending-assets">{thumbs}</div>
-            <button class="approve-btn" {btn_disabled}
-                onclick="approveCampaign('{p['캠페인ID']}', this)">
-                {btn_text}
+            <div class="pending-camp-id">Meta ID: {cid}</div>
+            <button class="approve-btn"
+                onclick="activateCampaign('{cid}', '{pid}', this)">
+                🚀 ACTIVE 전환
             </button>
         </div>"""
 
-    approval_html = f"""
-    <div class="approval-section">
-        <div class="approval-title">⏳ 승인 대기 {len(pending)}개
-            <span class="approval-sub">노션 연결 후 실제 데이터로 전환됩니다</span>
-        </div>
-        <div class="approval-list">{"".join(approval_card(p) for p in pending)}</div>
-    </div>""" if pending else ""
+    if a_camps:
+        a_task_html = f"""
+  <div class="task-block">
+    <div class="task-block-header">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <span class="task-label a-label">A작업</span>
+        <span class="task-title-text">업로드완료 → ACTIVE 전환 대기</span>
+        <span class="task-badge a-badge">{len(a_camps)}건</span>
+      </div>
+      <span class="task-desc">Meta에 업로드된 캠페인을 검토 후 집행 시작하세요</span>
+    </div>
+    <div class="pending-list">{"".join(a_card(p) for p in a_camps)}</div>
+  </div>"""
+    else:
+        a_task_html = """
+  <div class="task-block task-block-empty">
+    <span class="task-label a-label">A작업</span>
+    <span class="task-title-text">업로드완료 → ACTIVE 전환 대기</span>
+    <span class="task-empty-msg">승인 대기 캠페인 없음</span>
+  </div>"""
+
+    # ── B작업: 48시간 에셋 최적화 알람 ──────────────────────────────────
+    alerts = dry_run_alerts or []
+    if alerts:
+        def alarm_card(alert):
+            camp_name = alert["campaign_name"]
+            winner = alert["winner"]
+            losers = alert["loser_ids"]
+            loser_ids_json = json.dumps([l["id"] for l in losers])
+            winner_row = f"""<div class="alarm-asset alarm-winner">
+                ✅ <b>{winner['name']}</b>
+                <span class="alarm-stat">₩{int(winner['spend']):,}</span>
+                <span class="alarm-stat">CTR {winner['ctr']:.2f}%</span>
+                <span class="alarm-keep">유지</span>
+            </div>"""
+            loser_rows = "".join(f"""<div class="alarm-asset alarm-loser">
+                ⏸ {l['name']}
+                <span class="alarm-stat">₩{int(l['spend']):,}</span>
+                <span class="alarm-stat">CTR {l['ctr']:.2f}%</span>
+                <span class="alarm-cut">끌 예정</span>
+            </div>""" for l in losers)
+            return f"""<div class="alarm-card">
+                <div class="alarm-card-title">{camp_name}</div>
+                <div class="alarm-assets">{winner_row}{loser_rows}</div>
+                <button class="alarm-exec-btn" onclick="executeCut({loser_ids_json}, this)">이 캠페인 실행</button>
+            </div>"""
+
+        all_loser_ids = json.dumps([l["id"] for a in alerts for l in a["loser_ids"]])
+        b_task_html = f"""
+  <div class="task-block">
+    <div class="task-block-header">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <span class="task-label b-label">B작업</span>
+        <span class="task-title-text">48시간 에셋 최적화</span>
+        <span class="task-badge b-badge">{len(alerts)}건 대기</span>
+      </div>
+      <button class="alarm-all-btn" onclick="executeAllCuts({all_loser_ids})">전체 실행</button>
+    </div>
+    <div class="alarm-cards">{"".join(alarm_card(a) for a in alerts)}</div>
+  </div>"""
+    else:
+        b_task_html = """
+  <div class="task-block task-block-empty">
+    <span class="task-label b-label">B작업</span>
+    <span class="task-title-text">48시간 에셋 최적화</span>
+    <span class="task-empty-msg">현재 48시간 이상 경과한 에셋 없음</span>
+  </div>"""
+
+    workflow_section_html = f"""
+  <div class="workflow-container">
+{notif_block_html}
+{a_task_html}
+{b_task_html}
+  </div>"""
 
     region_list = list(regions_data.keys())
     chart_labels = json.dumps([r for r in region_list])
@@ -536,12 +589,13 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
         </div>"""
 
         # 카드 (헤더 + 요약만, 테이블 없음)
+        venue_name = data.get("venue_name") or region
         region_sections.append(f"""
-        <div class="region-card" onclick="openModal('{region_key}')" data-category="{category}" data-month="{month}" style="cursor:pointer;background:{CATEGORY_COLORS[category]}">
-            <div class="region-header" style="border-left: 4px solid {color}">
+        <div class="region-card" onclick="openModal('{region_key}')" data-category="{category}" data-month="{month}" style="cursor:pointer;background:{CATEGORY_COLORS[category]};border-left:4px solid {color}">
+            <div class="region-header">
                 <div class="region-title">
                     <span class="region-dot" style="background:{color}"></span>
-                    <h2>{region}</h2>
+                    <h2>{venue_name}</h2>
                     {('<span class="applicant-badge">👥 ' + fmt_number(data['campaigns'][0].get('applicants', 0)) + '명</span>') if data['campaigns'] and data['campaigns'][0].get('applicants') else ''}
                 </div>
                 <div class="region-summary">
@@ -678,22 +732,50 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   .applicants-cell {{ white-space: nowrap; }}
 
 
-  /* 승인 대기 섹션 */
-  .approval-section {{ background: #FFF8E1; border: 1.5px solid #FFD54F; border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; }}
-  .approval-title {{ font-size: 15px; font-weight: 700; color: #E65100; margin-bottom: 14px; display: flex; align-items: center; gap: 10px; }}
-  .approval-sub {{ font-size: 11px; font-weight: 400; color: #999; }}
-  .approval-list {{ display: flex; flex-wrap: wrap; gap: 14px; }}
-  .pending-card {{ background: white; border-radius: 10px; padding: 16px 18px; min-width: 220px; max-width: 260px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); display: flex; flex-direction: column; gap: 8px; }}
-  .pending-name {{ font-weight: 700; font-size: 15px; color: #1C1E21; }}
-  .pending-meta {{ display: flex; flex-wrap: wrap; gap: 6px; }}
-  .pending-meta span {{ font-size: 11px; background: #F0F2F5; padding: 2px 7px; border-radius: 8px; color: #444; }}
-  .pending-title {{ font-size: 12px; color: #606770; }}
-  .pending-assets {{ display: flex; gap: 6px; margin: 4px 0; }}
-  .pending-thumb {{ width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1.5px solid #E4E6EB; }}
-  .pending-thumb-empty {{ width: 56px; height: 56px; background: #E4E6EB; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 18px; }}
+  /* 워크플로우 (A/B 작업) 섹션 */
+  .workflow-container {{ display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }}
+  .notif-block {{ border-left: 4px solid #E65100; }}
+  .notif-dot {{ width: 9px; height: 9px; background: #E65100; border-radius: 50%; display: inline-block; flex-shrink: 0; animation: notif-pulse 1.5s ease-in-out infinite; }}
+  @keyframes notif-pulse {{ 0%,100% {{ opacity:1; transform:scale(1); }} 50% {{ opacity:0.4; transform:scale(0.8); }} }}
+  .notif-chip {{ font-size: 12px; background: #FFF3E0; color: #E65100; padding: 2px 10px; border-radius: 10px; white-space: nowrap; }}
+  .notif-goto-btn {{ background: #E65100; color: white; text-decoration: none; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 700; white-space: nowrap; display: inline-block; }}
+  .notif-goto-btn:hover {{ background: #BF360C; }}
+  .task-block {{ background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); padding: 20px 24px; }}
+  .task-block-empty {{ display: flex; align-items: center; gap: 10px; }}
+  .task-block-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }}
+  .task-label {{ font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 6px; }}
+  .a-label {{ background: #E3F2FD; color: #1565C0; }}
+  .b-label {{ background: #FFF3E0; color: #E65100; }}
+  .task-title-text {{ font-size: 15px; font-weight: 700; color: #1C1E21; }}
+  .task-badge {{ font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; }}
+  .a-badge {{ background: #E3F2FD; color: #1565C0; }}
+  .b-badge {{ background: #FFE0B2; color: #E65100; }}
+  .task-desc {{ font-size: 12px; color: #90949C; }}
+  .task-empty-msg {{ font-size: 13px; color: #90949C; }}
+  .pending-list {{ display: flex; flex-wrap: wrap; gap: 14px; }}
+  .pending-card {{ background: #F7F8FA; border-radius: 10px; padding: 16px 18px; min-width: 200px; flex: 1; border: 1px solid #E4E6EB; display: flex; flex-direction: column; gap: 8px; }}
+  .pending-name {{ font-weight: 700; font-size: 14px; color: #1C1E21; }}
+  .pending-meta {{ display: flex; flex-wrap: wrap; gap: 5px; }}
+  .pending-meta span {{ font-size: 11px; background: white; padding: 2px 7px; border-radius: 8px; border: 1px solid #E4E6EB; color: #444; }}
+  .pending-camp-id {{ font-size: 10px; color: #90949C; font-family: monospace; word-break: break-all; }}
   .approve-btn {{ background: #1877F2; color: white; border: none; padding: 9px 0; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; width: 100%; margin-top: 4px; }}
   .approve-btn:hover:not(:disabled) {{ background: #1565C0; }}
   .approve-btn:disabled {{ background: #E4E6EB; color: #999; cursor: not-allowed; }}
+  /* 알람 카드 (B작업) */
+  .alarm-cards {{ display: flex; flex-wrap: wrap; gap: 14px; }}
+  .alarm-card {{ background: #F7F8FA; border-radius: 10px; padding: 16px 18px; min-width: 260px; flex: 1; border: 1px solid #E4E6EB; }}
+  .alarm-card-title {{ font-size: 13px; font-weight: 700; color: #1C1E21; margin-bottom: 10px; }}
+  .alarm-assets {{ display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }}
+  .alarm-asset {{ font-size: 12px; padding: 7px 10px; border-radius: 7px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+  .alarm-winner {{ background: #E6F4EA; color: #1B5E20; }}
+  .alarm-loser {{ background: #FFF3E0; color: #6D4C41; }}
+  .alarm-stat {{ font-size: 11px; color: #606770; margin-left: 4px; }}
+  .alarm-keep {{ margin-left: auto; font-size: 11px; font-weight: 700; color: #137333; background: #C8E6C9; padding: 2px 8px; border-radius: 8px; }}
+  .alarm-cut {{ margin-left: auto; font-size: 11px; font-weight: 700; color: #BF360C; background: #FFE0B2; padding: 2px 8px; border-radius: 8px; }}
+  .alarm-exec-btn {{ background: #1877F2; color: white; border: none; padding: 8px 0; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; width: 100%; }}
+  .alarm-exec-btn:hover {{ background: #1565C0; }}
+  .alarm-all-btn {{ background: #E65100; color: white; border: none; padding: 7px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; }}
+  .alarm-all-btn:hover {{ background: #BF360C; }}
 
   /* 크리에이티브 이미지 스트립 */
   .creative-strip {{ display: flex; gap: 14px; padding: 16px 24px; border-bottom: 1px solid #E4E6EB; flex-wrap: wrap; align-items: flex-start; background: #FAFBFC; }}
@@ -764,6 +846,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <div class="date-badge">활성 캠페인 {totals['active_count']}개</div>
     <a href="approval.html" target="_blank" class="approval-link">📋 승인 대기</a>
+    <a href="/ad-setup" class="approval-link" style="background:#E7F3FF;color:#1877F2;">⚙️ 메타광고세팅</a>
     <button class="excel-btn" onclick="downloadExcel('event')">📥 행사별</button>
     <button class="excel-btn" onclick="downloadExcel('week')">📥 주차별</button>
     <button class="excel-btn" onclick="downloadExcel('month')">📥 월간</button>
@@ -773,7 +856,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
         <input type="file" name="csv" accept=".csv" onchange="this.form.submit()" style="display:none">
       </label>
     </form>
-    <form action="/refresh" method="POST" style="margin:0">
+    <form action="/refresh" method="POST" style="margin:0" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='호출 중...'">
       <button type="submit" class="refresh-btn">📡 메타호출</button>
     </form>
   </div>
@@ -804,16 +887,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
     </div>
   </div>
 
-  <div class="charts-grid">
-    <div class="chart-card">
-      <h3>지역별 소진금액</h3>
-      <canvas id="spendChart" height="220"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>지역별 평균 CTR</h3>
-      <canvas id="ctrChart" height="220"></canvas>
-    </div>
-  </div>
+{workflow_section_html}
 
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
     <div class="section-title" style="margin-bottom:0">지역별 캠페인 상세</div>
@@ -861,6 +935,17 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   </div>
 
   <div class="regions-grid" id="regionsGrid">{''.join(region_sections)}</div>
+
+  <div class="charts-grid" style="margin-top:32px">
+    <div class="chart-card">
+      <h3>지역별 소진금액</h3>
+      <canvas id="spendChart" height="220"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>지역별 평균 CTR</h3>
+      <canvas id="ctrChart" height="220"></canvas>
+    </div>
+  </div>
 
 </div>
 
@@ -957,7 +1042,36 @@ function downloadExcel(mode) {{
 }}
 
 
-// ── 캠페인 승인 (PAUSED → ACTIVE) ──────────────────────────────
+// ── A작업: 업로드완료 캠페인 ACTIVE 전환 (백엔드 경유 → 노션 상태도 업데이트) ──
+async function activateCampaign(campaignId, pageId, btn) {{
+  if (!confirm('이 캠페인을 ACTIVE로 전환하시겠습니까?\n집행 시작 후 노션 상태가 "집행중"으로 변경됩니다.')) return;
+  btn.disabled = true;
+  btn.textContent = '처리 중...';
+  try {{
+    const resp = await fetch('/api/campaign/activate', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{ campaign_id: campaignId, page_id: pageId }})
+    }});
+    const result = await resp.json();
+    if (result.success) {{
+      btn.textContent = '✅ 집행 시작됨';
+      btn.style.background = '#E6F4EA';
+      btn.style.color = '#137333';
+      btn.closest('.pending-card').style.opacity = '0.5';
+    }} else {{
+      btn.textContent = '❌ 실패';
+      btn.disabled = false;
+      alert('오류: ' + (result.error || JSON.stringify(result)));
+    }}
+  }} catch(e) {{
+    btn.textContent = '❌ 실패';
+    btn.disabled = false;
+    alert('오류: ' + e.message);
+  }}
+}}
+
+// ── 캠페인 승인 (approval.html 전용, PAUSED → ACTIVE) ──────────────────────────────
 async function approveCampaign(campaignId, btn) {{
   if (!confirm('이 캠페인을 ACTIVE로 전환하시겠습니까?')) return;
   btn.disabled = true;
@@ -1050,6 +1164,53 @@ function renderAdsTable(ads) {{
     </tr></thead>
     <tbody>${{rows}}</tbody>
   </table>`;
+}}
+
+// ── 자동화 알람 — 에셋 컷 실행 ───────────────────────────────────
+async function pauseAd(adId) {{
+  const body = new URLSearchParams({{ status: 'PAUSED', access_token: ACCESS_TOKEN }});
+  const resp = await fetch(`https://graph.facebook.com/{API_VERSION}/${{adId}}`, {{ method: 'POST', body }});
+  const result = await resp.json();
+  if (!result.success) throw new Error(result.error?.message || JSON.stringify(result));
+}}
+
+async function executeCut(loserIds, btn) {{
+  if (!confirm(`${{loserIds.length}}개 에셋을 PAUSED 처리하시겠습니까?`)) return;
+  btn.disabled = true;
+  btn.textContent = '처리 중...';
+  try {{
+    await Promise.all(loserIds.map(id => pauseAd(id)));
+    btn.textContent = '✅ 완료';
+    btn.style.background = '#137333';
+    btn.closest('.alarm-card').querySelectorAll('.alarm-loser').forEach(el => {{
+      el.style.opacity = '0.4';
+      el.querySelector('.alarm-cut').textContent = '완료';
+    }});
+  }} catch(e) {{
+    btn.textContent = '❌ 실패';
+    btn.disabled = false;
+    alert('오류: ' + e.message);
+  }}
+}}
+
+async function executeAllCuts(allLoserIds) {{
+  if (!confirm(`전체 ${{allLoserIds.length}}개 에셋을 PAUSED 처리하시겠습니까?`)) return;
+  document.querySelectorAll('.alarm-exec-btn').forEach(btn => btn.click && (btn.disabled = true));
+  try {{
+    await Promise.all(allLoserIds.map(id => pauseAd(id)));
+    document.querySelectorAll('.alarm-loser').forEach(el => {{
+      el.style.opacity = '0.4';
+      const cut = el.querySelector('.alarm-cut');
+      if (cut) cut.textContent = '완료';
+    }});
+    document.querySelectorAll('.alarm-exec-btn').forEach(btn => {{
+      btn.textContent = '✅ 완료';
+      btn.style.background = '#137333';
+    }});
+  }} catch(e) {{
+    alert('오류: ' + e.message);
+    document.querySelectorAll('.alarm-exec-btn').forEach(btn => btn.disabled = false);
+  }}
 }}
 
 // ── ON/OFF 토글 → Meta API 호출 ──────────────────────────────────
@@ -1218,7 +1379,7 @@ def main():
 
     print("노션 좌석수 조회 중...")
     from notion_client_helper import get_seat_by_date
-    seat_by_date = get_seat_by_date()  # {(6, 9): 3200, ...}
+    seat_by_date, venue_by_date = get_seat_by_date()  # {(6, 9): 3200, ...}, {(6, 9): "아산 온양관광호텔", ...}
 
     ads_by_campaign = defaultdict(list)
     for ad in ads:
@@ -1251,6 +1412,8 @@ def main():
         applicants = applicant_counts.get(date_key, 0)
         if date_key and date_key in seat_by_date:
             regions_data[region]["seat_count"] = seat_by_date[date_key]
+        if date_key and date_key in venue_by_date and not regions_data[region].get("venue_name"):
+            regions_data[region]["venue_name"] = venue_by_date[date_key]
 
         created = campaign.get("created_time", "")[:10]  # "2026-05-06T..." → "2026-05-06"
 
@@ -1314,8 +1477,59 @@ def main():
         "avg_ctr": sum(c["ctr"] for c in all_camps_with_data) / len(all_camps_with_data) if all_camps_with_data else 0,
     }
 
+    # ── 48시간 에셋 컷 dry-run 계산 ──────────────────────────────────
+    now_utc = datetime.now(timezone.utc)
+    dry_run_alerts = []
+    for camp_id, camp_ads in ads_by_campaign.items():
+        camp = next((c for c in campaigns if c["id"] == camp_id), None)
+        if not camp:
+            continue
+        eligible = []
+        for ad in camp_ads:
+            created_str = ad.get("created_time", "")
+            if not created_str:
+                continue
+            created_dt = datetime.fromisoformat(re.sub(r'([+-])(\d{2})(\d{2})$', r'\1\2:\3', created_str.replace("Z", "+00:00")))
+            hours = (now_utc - created_dt).total_seconds() / 3600
+            if hours < 48:
+                continue
+            ins = (ad.get("insights") or {}).get("data", [{}])
+            ins = ins[0] if ins else {}
+            eligible.append({
+                "id": ad["id"],
+                "name": ad.get("name", ad["id"]),
+                "spend": float(ins.get("spend", 0)),
+                "ctr": float(ins.get("ctr", 0)),
+                "status": ad.get("status", ""),
+            })
+        active_eligible = [a for a in eligible if a["status"] == "ACTIVE"]
+        if len(active_eligible) < 2:
+            continue
+        active_eligible.sort(key=lambda x: x["spend"], reverse=True)
+        winner = active_eligible[0]
+        losers = active_eligible[1:]
+        dry_run_alerts.append({
+            "campaign_name": camp["name"],
+            "winner": winner,
+            "loser_ids": losers,
+        })
+    print(f"  → dry-run 알람 {len(dry_run_alerts)}건")
+
+    from notion_client_helper import query_campaigns as _qc, parse_campaign as _parse
+
+    pending_upload_campaigns = []
+
+    # 노션 '업로드완료' 캠페인 조회 (A작업 목록)
+    try:
+        upload_complete_pages = _qc(filter_status="업로드완료")
+        upload_complete_campaigns = [_parse(p) for p in upload_complete_pages]
+        print(f"  → 업로드완료 캠페인 {len(upload_complete_campaigns)}건 (A작업 대기)")
+    except Exception as e:
+        print(f"  → 노션 업로드완료 조회 실패: {e}")
+        upload_complete_campaigns = []
+
     print("\nHTML 대시보드 생성 중...")
-    html = build_html(sorted_regions, totals, dict(ads_by_campaign), dict(platform_by_region))
+    html = build_html(sorted_regions, totals, dict(ads_by_campaign), dict(platform_by_region), dry_run_alerts=dry_run_alerts, upload_complete=upload_complete_campaigns, pending_upload=pending_upload_campaigns)
 
     with open("dashboard.html", "w", encoding="utf-8") as f:
         f.write(html)

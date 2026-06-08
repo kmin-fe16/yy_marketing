@@ -31,16 +31,6 @@ NOTION_HEADERS = {
 BUDGET_TRAFFIC  = 35_000   # 트래픽 일예산 (원)
 BUDGET_LATENT   = 20_000   # 잠재 일예산 (원)
 
-REGION_MAP = {
-    "서울": "KR:Seoul",    "마포": "KR:Seoul",    "서초": "KR:Seoul",
-    "부산": "KR:Busan",    "대구": "KR:Daegu",    "인천": "KR:Incheon",
-    "광주": "KR:Gwangju",  "대전": "KR:Daejeon",  "울산": "KR:Ulsan",
-    "세종": "KR:Sejong-si",
-    "수원": "KR:Gyeonggi-do", "성남": "KR:Gyeonggi-do",
-    "부천": "KR:Gyeonggi-do", "평택": "KR:Gyeonggi-do",
-    "창원": "KR:South Gyeongsang",
-}
-
 _page_id_cache = None
 
 
@@ -96,6 +86,10 @@ def gdrive_to_image_hash(drive_url: str) -> str:
 
 # ── Meta API 헬퍼 ────────────────────────────────────────────────────
 
+FB_PAGE_ID = os.getenv("META_FB_PAGE_ID", "952888584569714")
+IG_USER_ID = os.getenv("META_IG_USER_ID", "17841478746782671")
+
+
 def _get_page_id() -> str:
     global _page_id_cache
     if _page_id_cache:
@@ -110,7 +104,8 @@ def _get_page_id() -> str:
         if data:
             _page_id_cache = data[0]["id"]
             return _page_id_cache
-    return ""
+    _page_id_cache = FB_PAGE_ID
+    return FB_PAGE_ID
 
 
 def create_campaign(name: str) -> str:
@@ -122,6 +117,7 @@ def create_campaign(name: str) -> str:
             "objective": "OUTCOME_TRAFFIC",
             "status": "PAUSED",
             "special_ad_categories": [],
+            "is_adset_budget_sharing_enabled": False,
         },
         timeout=15,
     )
@@ -130,22 +126,15 @@ def create_campaign(name: str) -> str:
 
 
 def create_adset(campaign_id: str, name: str, daily_budget: int, info: dict) -> str:
-    region_key = next((k for k in REGION_MAP if k in info.get("지역", "")), None)
-    geo = (
-        {"cities": [{"key": REGION_MAP[region_key]}]}
-        if region_key
-        else {"countries": ["KR"]}
-    )
-
     targeting = {
         "age_min": 32,
         "age_max": 62,
         "genders": [2],                          # 여성
-        "geo_locations": geo,
-        "publisher_platforms": ["facebook", "instagram"],
+        "geo_locations": {"countries": ["KR"]},
+        "publisher_platforms": ["facebook"],
         "facebook_positions": ["feed"],
-        "instagram_positions": ["stream"],
         "targeting_relaxation_types": {"lookalike": 0, "custom_audience": 0},
+        "targeting_automation": {"advantage_audience": 0},
     }
 
     resp = requests.post(
@@ -157,6 +146,7 @@ def create_adset(campaign_id: str, name: str, daily_budget: int, info: dict) -> 
             "daily_budget": daily_budget,
             "billing_event": "IMPRESSIONS",
             "optimization_goal": "LANDING_PAGE_VIEWS",
+            "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
             "targeting": targeting,
             "status": "PAUSED",
         },
@@ -168,6 +158,9 @@ def create_adset(campaign_id: str, name: str, daily_budget: int, info: dict) -> 
 
 def create_ad(adset_id: str, camp_name: str, n: int, image_hash: str, info: dict) -> str:
     ad_name = f"{camp_name}-{n}"
+    label = ["A", "B", "C"][n - 1]
+    headline = info.get(f"광고제목{label}") or ""
+    body = info.get(f"광고본문{label}") or ""
     creative_resp = requests.post(
         f"{API}/{AD_ACCOUNT}/adcreatives",
         params={"access_token": TOKEN},
@@ -175,21 +168,22 @@ def create_ad(adset_id: str, camp_name: str, n: int, image_hash: str, info: dict
             "name": ad_name,
             "object_story_spec": {
                 "page_id": _get_page_id(),
+                "instagram_user_id": IG_USER_ID,
                 "link_data": {
                     "image_hash": image_hash,
                     "link": info["랜딩URL"],
-                    "message": info["광고본문"],
-                    "name": info["광고제목"],
+                    "message": body,
+                    "name": headline,
                     "call_to_action": {
-                        "type": "SIGN_UP",
-                        "value": {"link": info["랜딩URL"]},
+                        "type": "APPLY_NOW",
                     },
                 },
             },
         },
         timeout=15,
     )
-    creative_resp.raise_for_status()
+    if not creative_resp.ok:
+        raise RuntimeError(f"adcreative 실패: {creative_resp.json()}")
     creative_id = creative_resp.json()["id"]
 
     ad_resp = requests.post(
@@ -222,8 +216,7 @@ def process(page: dict):
     name = info["공연명"]
     print(f"\n  처리 중: {name}")
 
-    camp_name        = build_camp_name(info)
-    camp_name_latent = build_camp_name(info, " 잠재")
+    camp_name = build_camp_name(info)
 
     # 이미지 업로드
     asset_urls = [u for u in [info["에셋A"], info["에셋B"], info["에셋C"]] if u]
@@ -245,14 +238,6 @@ def process(page: dict):
     for n, h in enumerate(hashes, 1):
         create_ad(asid1, camp_name, n, h, info)
     print(f"    → 캠페인ID: {cid1}, 에셋 {len(hashes)}개")
-
-    # 캠페인2: 잠재
-    print(f"    캠페인2 생성: {camp_name_latent}")
-    cid2   = create_campaign(camp_name_latent)
-    asid2  = create_adset(cid2, camp_name_latent, BUDGET_LATENT, info)
-    for n, h in enumerate(hashes, 1):
-        create_ad(asid2, camp_name_latent, n, h, info)
-    print(f"    → 캠페인ID: {cid2}, 에셋 {len(hashes)}개")
 
     # 노션 업데이트
     update_campaign(info["page_id"], {

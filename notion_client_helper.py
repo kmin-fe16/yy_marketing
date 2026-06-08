@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
-NOTION_DB_ID = os.getenv("NOTION_DB_ID", "e4ea3f29-f959-47ae-ae02-496c804502fb")
+NOTION_DB_ID = os.getenv("CAMPAIGN_NOTION_DB_ID")
+# 2026 공연일정 DB — 좌석수 롤업이 대관장소 DB와 연결되어 있음
+PERFORMANCE_DB_ID = os.getenv("PERFORMANCE_DB_ID", "32839fb1f9d680ef9f60c7b0b0d04672")
 HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
@@ -45,9 +47,9 @@ def update_campaign(page_id: str, updates: dict) -> bool:
     for key, val in updates.items():
         if key == "상태":
             properties[key] = {"select": {"name": val}}
-        elif key in ("Meta 캠페인ID", "Meta 광고세트ID", "지역", "광고제목", "광고본문", "메모"):
+        elif key in ("Meta 캠페인 ID", "Meta 광고세팅 ID", "지역", "A 제목", "B 제목", "C 제목", "A 본문", "B 본문", "C 본문", "메모"):
             properties[key] = {"rich_text": [{"text": {"content": str(val)}}]}
-        elif key in ("집행시작일", "광고시작일", "공연일"):
+        elif key in ("광고시작일", "공연일"):
             properties[key] = {"date": {"start": str(val)}}
         elif key == "일예산":
             properties[key] = {"number": float(val)}
@@ -61,34 +63,60 @@ def update_campaign(page_id: str, updates: dict) -> bool:
     return resp.ok
 
 
-def get_seat_by_date() -> dict:
-    """공연일 기준 좌석수 반환. {(month, day): seat_count}
-    공연일 미입력 시 공연명(26MMDD...)에서 날짜 파싱.
+def get_seat_by_date() -> tuple:
+    """2026 공연일정 DB에서 날짜 기준 좌석수, 장소명 반환.
+    Returns: ({(month, day): seat_count}, {(month, day): venue_name})
     """
-    import re
-    from datetime import datetime
     try:
-        pages = query_campaigns()
-        result = {}
-        for page in pages:
-            c = parse_campaign(page)
-            if not c["좌석수"]:
+        all_pages = []
+        cursor = None
+        while True:
+            body = {"page_size": 100}
+            if cursor:
+                body["start_cursor"] = cursor
+            resp = requests.post(
+                f"https://api.notion.com/v1/databases/{PERFORMANCE_DB_ID}/query",
+                headers=HEADERS,
+                json=body,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            all_pages.extend(data.get("results", []))
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+
+        seats = {}
+        venues = {}
+        for page in all_pages:
+            props = page["properties"]
+            date_val = props.get("날짜", {}).get("date")
+            if not date_val:
                 continue
-            key = None
-            if c["공연일"]:
-                d = datetime.fromisoformat(c["공연일"])
-                key = (d.month, d.day)
-            else:
-                m = re.match(r"26(\d{2})(\d{2})", c["공연명"].strip())
-                if m:
-                    key = (int(m.group(1)), int(m.group(2)))
-            if key:
-                result[key] = int(c["좌석수"])
-        print(f"[노션] 좌석수 {len(result)}개 행사 조회 완료")
-        return result
+            d = datetime.fromisoformat(date_val["start"])
+            key = (d.month, d.day)
+
+            seat_arr = props.get("좌석수", {}).get("rollup", {}).get("array", [])
+            seat = seat_arr[0].get("number") if seat_arr else None
+            if seat and key not in seats:
+                seats[key] = int(seat)
+
+            venue_arr = props.get("주소", {}).get("rollup", {}).get("array", [])
+            if venue_arr and key not in venues:
+                item = venue_arr[0]
+                if item.get("type") == "title":
+                    title_items = item.get("title", [])
+                    venues[key] = title_items[0].get("plain_text", "") if title_items else ""
+                elif item.get("type") == "rich_text":
+                    rt_items = item.get("rich_text", [])
+                    venues[key] = rt_items[0].get("plain_text", "") if rt_items else ""
+
+        print(f"[노션] 좌석수 {len(seats)}개, 장소명 {len(venues)}개 행사 조회 완료")
+        return seats, venues
     except Exception as e:
         print(f"[노션] 좌석수 조회 실패: {e}")
-        return {}
+        return {}, {}
 
 
 def parse_campaign(page: dict) -> dict:
@@ -130,19 +158,21 @@ def parse_campaign(page: dict) -> dict:
         "공연일": date_val("공연일"),
         "광고시작일": date_val("광고시작일"),
         "일예산": number("일예산"),
-        "연령대": multi_select("연령대"),
-        "성별": select_val("성별") or "여성",
-        "지역확장": checkbox("지역확장"),
-        "광고제목": text("광고제목"),
-        "광고본문": text("광고본문"),
-        "에셋A": url_val("에셋A URL"),
-        "에셋B": url_val("에셋B URL"),
-        "에셋C": url_val("에셋C URL"),
+        "연령대": multi_select("다중 선택"),
+        "성별": select_val("선택") or "여성",
+        "광고제목A": text("A 제목"),
+        "광고제목B": text("B 제목"),
+        "광고제목C": text("C 제목"),
+        "광고본문A": text("A 본문"),
+        "광고본문B": text("B 본문"),
+        "광고본문C": text("C 본문"),
+        "에셋A": url_val("에셋A_url"),
+        "에셋B": url_val("에셋B_url"),
+        "에셋C": url_val("에셋C_url"),
         "랜딩URL": url_val("랜딩URL"),
         "상태": select_val("상태"),
-        "캠페인ID": text("Meta 캠페인ID"),
-        "광고세트ID": text("Meta 광고세트ID"),
-        "집행시작일": date_val("집행시작일"),
+        "캠페인ID": text("Meta 캠페인 ID"),
+        "광고세트ID": text("Meta 광고세팅 ID"),
         "좌석수": number("좌석수"),
-        "차수": text("차수") or "1차",
+        "차수": text("텍스트") or "1차",
     }
