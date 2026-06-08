@@ -119,6 +119,16 @@ def get_seat_by_date() -> tuple:
         return {}, {}
 
 
+def _fetch_page(page_id: str) -> dict:
+    resp = requests.get(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=HEADERS,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def parse_campaign(page: dict) -> dict:
     """노션 페이지에서 캠페인 정보 추출."""
     props = page["properties"]
@@ -145,17 +155,45 @@ def parse_campaign(page: dict) -> dict:
     def url_val(key):
         return props.get(key, {}).get("url") or ""
 
-    def checkbox(key):
-        return props.get(key, {}).get("checkbox", False)
-
     def number(key):
         return props.get(key, {}).get("number") or 0
+
+    def rollup_date(key):
+        arr = props.get(key, {}).get("rollup", {}).get("array", [])
+        for item in arr:
+            if item.get("type") == "date" and item.get("date"):
+                return item["date"]["start"]
+        return None
+
+    def rollup_select(key):
+        arr = props.get(key, {}).get("rollup", {}).get("array", [])
+        for item in arr:
+            if item.get("type") == "select" and item.get("select"):
+                return item["select"]["name"]
+        return None
+
+    # 공연장소: 🗓️ 2026 공연일정 관련 페이지 → 주소 rollup title
+    공연장소 = ""
+    try:
+        schedule_ids = props.get("🗓️ 2026 공연일정", {}).get("relation", [])
+        if schedule_ids:
+            sched = _fetch_page(schedule_ids[0]["id"])
+            addr_arr = sched["properties"].get("주소", {}).get("rollup", {}).get("array", [])
+            for item in addr_arr:
+                if item.get("type") == "title":
+                    t_items = item.get("title", [])
+                    공연장소 = t_items[0]["plain_text"] if t_items else ""
+                    break
+    except Exception:
+        pass
 
     return {
         "page_id": page["id"],
         "공연명": title("공연명"),
-        "지역": text("지역"),
-        "공연일": date_val("공연일"),
+        "공연날짜": rollup_date("공연날짜"),
+        "공연장소": 공연장소,
+        "행사구분": rollup_select("행사구분") or "",
+        "차수": select_val("차수") or "1차",
         "광고시작일": date_val("광고시작일"),
         "일예산": number("일예산"),
         "연령대": multi_select("다중 선택"),
@@ -173,6 +211,4 @@ def parse_campaign(page: dict) -> dict:
         "상태": select_val("상태"),
         "캠페인ID": text("Meta 캠페인 ID"),
         "광고세트ID": text("Meta 광고세팅 ID"),
-        "좌석수": number("좌석수"),
-        "차수": text("텍스트") or "1차",
     }

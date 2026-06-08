@@ -127,7 +127,7 @@ def create_adset(campaign_id: str, name: str, daily_budget: int, info: dict) -> 
         "age_max": 62,
         "genders": [2],                          # 여성
         "geo_locations": {"countries": ["KR"]},
-        "locales": [41],                         # 한국어
+        "locales": [12],                         # 한국어
         "publisher_platforms": ["facebook", "instagram"],
         "facebook_positions": ["feed"],
         "instagram_positions": ["stream"],
@@ -178,6 +178,7 @@ def create_ad(adset_id: str, camp_name: str, n: int, image_hash: str, info: dict
                     },
                 },
             },
+            "multi_advertiser_eligibility": "INELIGIBLE",
         },
         timeout=15,
     )
@@ -210,7 +211,11 @@ def build_camp_name(info: dict, suffix: str = "") -> str:
 
 # ── 행사 1개 처리 ────────────────────────────────────────────────────
 
-def process(page: dict):
+def process(page: dict, on_step=None):
+    def emit(msg):
+        if on_step:
+            on_step(msg)
+
     info = parse_campaign(page)
     name = info["공연명"]
     print(f"\n  처리 중: {name}")
@@ -223,27 +228,41 @@ def process(page: dict):
         print(f"  ⚠️  에셋 URL 없음 — 건너뜀: {name}")
         return
 
-    print(f"    이미지 업로드 중 ({len(asset_urls)}개)...")
     hashes = []
-    for url in asset_urls:
+    for i, url in enumerate(asset_urls, 1):
+        emit(f"이미지 {i}/{len(asset_urls)} 업로드 중...")
         h = gdrive_to_image_hash(url)
         hashes.append(h)
+        emit(f"이미지 {i}/{len(asset_urls)} 완료")
         print(f"    ✓ 업로드 완료: {url[:60]}...")
 
-    # 캠페인1: 트래픽
-    print(f"    캠페인1 생성: {camp_name}")
-    cid1   = create_campaign(camp_name)
-    asid1  = create_adset(cid1, camp_name, BUDGET_TRAFFIC, info)
-    for n, h in enumerate(hashes, 1):
-        create_ad(asid1, camp_name, n, h, info)
-    print(f"    → 캠페인ID: {cid1}, 에셋 {len(hashes)}개")
+    emit("캠페인 생성 중...")
+    print(f"    캠페인 생성: {camp_name}")
+    cid1 = create_campaign(camp_name)
 
-    # 노션 업데이트
-    update_campaign(info["page_id"], {
-        "상태": "업로드완료",
-        "Meta 캠페인ID": cid1,
-        "Meta 광고세트ID": asid1,
-    })
+    try:
+        emit("광고세트 생성 중...")
+        asid1 = create_adset(cid1, camp_name, BUDGET_TRAFFIC, info)
+
+        for n, h in enumerate(hashes, 1):
+            emit(f"광고 소재 {n}/{len(hashes)} 생성 중...")
+            create_ad(asid1, camp_name, n, h, info)
+
+        emit("노션 업데이트 중...")
+        print(f"    → 캠페인ID: {cid1}, 에셋 {len(hashes)}개")
+        update_campaign(info["page_id"], {
+            "상태": "업로드완료",
+            "Meta 캠페인ID": cid1,
+            "Meta 광고세트ID": asid1,
+        })
+    except Exception:
+        # 실패 시 생성된 캠페인 삭제 (중복 방지)
+        try:
+            requests.delete(f"{API}/{cid1}", params={"access_token": TOKEN}, timeout=10)
+            print(f"    ↩ 롤백: 캠페인 {cid1} 삭제")
+        except Exception:
+            pass
+        raise
 
     # 텔레그램 알림
     send_message(

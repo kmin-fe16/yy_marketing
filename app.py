@@ -84,7 +84,9 @@ def notion_sync_sse():
                     name = camp.get("공연명", "?")
                     q.put(_sse({"type": "progress", "current": i + 1, "total": total, "name": name}))
                     try:
-                        _upload(page)
+                        _upload(page, on_step=lambda msg, i=i, t=total: q.put(
+                            _sse({"type": "sub", "msg": msg, "campaign_idx": i + 1, "total": t})
+                        ))
                         results.append({"name": name, "ok": True})
                         q.put(_sse({"type": "item", "name": name, "ok": True}))
                     except Exception as e:

@@ -402,45 +402,69 @@ function syncNotion() {{
   document.getElementById('syncLog').innerHTML = '';
   document.getElementById('syncCloseBtn').style.display = 'none';
 
+  let _total = 1, _campIdx = 0, _subStep = 0, _subTotal = 9;
+  const bar = document.getElementById('syncBar');
+  const status = document.getElementById('syncStatus');
+
+  function setBar(pct) {{
+    bar.style.width = Math.min(pct, 99) + '%';
+  }}
+
   const es = new EventSource('/notion-sync-sse');
   es.onmessage = function(e) {{
     const d = JSON.parse(e.data);
     if (d.type === 'status') {{
-      document.getElementById('syncStatus').textContent = d.msg;
-      document.getElementById('syncBar').style.width = '10%';
+      status.textContent = d.msg;
+      setBar(5);
     }} else if (d.type === 'total') {{
-      document.getElementById('syncStatus').textContent = `총 ${{d.total}}개 캠페인 업로드 중...`;
+      _total = d.total;
+      status.textContent = `총 ${{d.total}}개 캠페인 처리 예정`;
+      setBar(8);
     }} else if (d.type === 'progress') {{
-      const pct = Math.round((d.current / d.total) * 85) + 10;
-      document.getElementById('syncBar').style.width = pct + '%';
-      document.getElementById('syncStatus').textContent = `(${{d.current}}/${{d.total}}) ${{d.name}} 업로드 중...`;
+      _campIdx = d.current - 1;
+      _subStep = 0;
+      const base = (_campIdx / _total) * 90 + 8;
+      setBar(base);
+      status.textContent = `(${{d.current}}/${{d.total}}) ${{d.name}}`;
+    }} else if (d.type === 'sub') {{
+      _subStep++;
+      const slotSize = 90 / _total;
+      const base = (_campIdx / _total) * 90 + 8;
+      const subPct = base + (_subStep / _subTotal) * slotSize;
+      setBar(subPct);
+      status.textContent = `(${{d.campaign_idx}}/${{d.total}}) ${{d.msg}}`;
     }} else if (d.type === 'item') {{
+      const campDone = ((_campIdx + 1) / _total) * 90 + 8;
+      setBar(campDone);
       const el = document.createElement('div');
       el.className = 'sync-log-item ' + (d.ok ? 'ok' : 'fail');
       el.textContent = (d.ok ? '✅ ' : '❌ ') + d.name + (d.error ? ' — ' + d.error : '');
       document.getElementById('syncLog').appendChild(el);
+      _campIdx++;
+      _subStep = 0;
     }} else if (d.type === 'done') {{
-      document.getElementById('syncBar').style.width = '100%';
+      setBar(100);
+      bar.style.width = '100%';
       if (d.msg) {{
-        document.getElementById('syncStatus').textContent = d.msg;
+        status.textContent = d.msg;
       }} else {{
         const ok = (d.results || []).filter(r => r.ok).length;
         const fail = (d.results || []).filter(r => !r.ok).length;
-        document.getElementById('syncStatus').textContent = `완료 — 성공 ${{ok}}개${{fail ? ', 실패 ' + fail + '개' : ''}}`;
+        status.textContent = `완료 — 성공 ${{ok}}개${{fail ? ', 실패 ' + fail + '개' : ''}}`;
       }}
       document.getElementById('syncCloseBtn').style.display = 'block';
       btn.disabled = false;
       es.close();
     }} else if (d.type === 'error') {{
-      document.getElementById('syncStatus').textContent = '오류: ' + d.msg;
-      document.getElementById('syncBar').style.background = '#E53935';
+      status.textContent = '오류: ' + d.msg;
+      bar.style.background = '#E53935';
       document.getElementById('syncCloseBtn').style.display = 'block';
       btn.disabled = false;
       es.close();
     }}
   }};
   es.onerror = function() {{
-    document.getElementById('syncStatus').textContent = '연결 오류가 발생했습니다.';
+    status.textContent = '연결 오류가 발생했습니다.';
     document.getElementById('syncCloseBtn').style.display = 'block';
     btn.disabled = false;
     es.close();
