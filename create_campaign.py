@@ -1,9 +1,6 @@
 """Notion DB '대기' 행사 → Meta 캠페인 자동 생성.
 
-캠페인 2개 생성:
-  - YYMMDD 지역 공연명 N차        (트래픽, 35,000원/일)
-  - YYMMDD 지역 공연명 N차 잠재   (잠재, 20,000원/일)
-각 캠페인 아래 광고세트 1개 + 에셋-1/2/3 광고 3개.
+트래픽 캠페인 1개 (35,000원/일), 광고세트 1개 + 에셋 최대 3개.
 완료 시 Notion 상태 → '업로드완료'.
 """
 import os
@@ -28,8 +25,7 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-BUDGET_TRAFFIC  = 35_000   # 트래픽 일예산 (원)
-BUDGET_LATENT   = 20_000   # 잠재 일예산 (원)
+BUDGET_TRAFFIC = 35_000   # 트래픽 일예산 (원)
 
 _page_id_cache = None
 
@@ -131,8 +127,10 @@ def create_adset(campaign_id: str, name: str, daily_budget: int, info: dict) -> 
         "age_max": 62,
         "genders": [2],                          # 여성
         "geo_locations": {"countries": ["KR"]},
-        "publisher_platforms": ["facebook"],
+        "locales": [41],                         # 한국어
+        "publisher_platforms": ["facebook", "instagram"],
         "facebook_positions": ["feed"],
+        "instagram_positions": ["stream"],
         "targeting_relaxation_types": {"lookalike": 0, "custom_audience": 0},
         "targeting_automation": {"advantage_audience": 0},
     }
@@ -148,6 +146,7 @@ def create_adset(campaign_id: str, name: str, daily_budget: int, info: dict) -> 
             "optimization_goal": "LANDING_PAGE_VIEWS",
             "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
             "targeting": targeting,
+            "multi_advertiser_eligibility": "INELIGIBLE",
             "status": "PAUSED",
         },
         timeout=15,
@@ -204,9 +203,9 @@ def create_ad(adset_id: str, camp_name: str, n: int, image_hash: str, info: dict
 # ── 캠페인명 생성 ────────────────────────────────────────────────────
 
 def build_camp_name(info: dict, suffix: str = "") -> str:
-    d = datetime.fromisoformat(info["공연일"])
+    d = datetime.fromisoformat(info["공연날짜"])
     yymmdd = d.strftime("%y%m%d")
-    return f"{yymmdd} {info['지역']} {info['공연명']} {info['차수']}{suffix}"
+    return f"{yymmdd} {info['공연장소']} {info['행사구분']} {info['차수']}{suffix}"
 
 
 # ── 행사 1개 처리 ────────────────────────────────────────────────────
@@ -249,10 +248,10 @@ def process(page: dict):
     # 텔레그램 알림
     send_message(
         f"🎭 <b>[{camp_name}] 캠페인 생성 완료</b>\n\n"
-        f"📍 지역: {info['지역']}\n"
-        f"📅 공연일: {info['공연일']}\n"
+        f"📍 장소: {info['공연장소']}\n"
+        f"📅 공연일: {info['공연날짜']}\n"
         f"🖼 에셋: {len(hashes)}개\n"
-        f"💰 트래픽 ₩{BUDGET_TRAFFIC:,} / 잠재 ₩{BUDGET_LATENT:,}\n\n"
+        f"💰 일예산 ₩{BUDGET_TRAFFIC:,}\n\n"
         f"대시보드에서 확인 후 ACTIVE 전환해주세요."
     )
     print(f"  ✅ 완료: {name}")
