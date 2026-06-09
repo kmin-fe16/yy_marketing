@@ -3,7 +3,7 @@ import json as _json
 import queue as _queue
 import threading
 import requests as req
-from flask import Flask, request, redirect, send_file, jsonify, Response, stream_with_context
+from flask import Flask, request, redirect, send_file, jsonify, Response, stream_with_context, make_response
 
 import generate_dashboard
 import ad_setup_page
@@ -24,7 +24,11 @@ def index():
     html_path = os.path.join(BASE_DIR, "dashboard.html")
     if not os.path.exists(html_path):
         _bg_refresh()
-    return send_file(html_path)
+    resp = make_response(send_file(html_path))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/refresh", methods=["POST"])
@@ -98,6 +102,7 @@ def notion_sync_sse():
                 q.put(_sse({"type": "error", "msg": str(e)}))
             finally:
                 q.put(None)
+                threading.Thread(target=_bg_refresh, daemon=True).start()
 
         threading.Thread(target=run, daemon=True).start()
         while True:
@@ -143,6 +148,7 @@ def ad_setup_run(page_id):
         resp.raise_for_status()
         page = resp.json()
         process(page)
+        _bg_refresh()
         return jsonify({"message": "캠페인 생성 완료 — 노션 상태가 '업로드완료'로 변경됐습니다."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

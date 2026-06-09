@@ -569,6 +569,11 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
         category = detect_category(data['campaigns'])
         month = detect_month(data['campaigns'])
 
+        # 공연일 + 요일
+        _WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+        _edate = campaign_event_date(data['campaigns'][0]['name']) if data['campaigns'] else None
+        event_date_label = f"{_edate.month}/{_edate.day}({_WEEKDAYS[_edate.weekday()]})" if _edate else ""
+
         # 모달 내용 (크리에이티브 + 캠페인 테이블)
         modal_contents[region_key] = f"""
         <div class="modal-region-title" style="border-left:4px solid {color}; padding-left:12px; margin-bottom:16px;">
@@ -591,11 +596,12 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
         # 카드 (헤더 + 요약만, 테이블 없음)
         venue_name = data.get("venue_name") or region
         region_sections.append(f"""
-        <div class="region-card" onclick="openModal('{region_key}')" data-category="{category}" data-month="{month}" style="cursor:pointer;background:{CATEGORY_COLORS[category]};border-left:4px solid {color}">
+        <div class="region-card" id="card-{region_key}" onclick="openModal('{region_key}')" data-category="{category}" data-month="{month}" data-label="{venue_name}" style="cursor:pointer;background:{CATEGORY_COLORS[category]};border-left:4px solid {color}">
+            <button class="card-close-btn" onclick="hideCard('{region_key}',event)" title="숨기기">×</button>
             <div class="region-header">
                 <div class="region-title">
                     <span class="region-dot" style="background:{color}"></span>
-                    <h2>{venue_name}</h2>
+                    <h2>{(' <span class="event-date-label">' + event_date_label + '</span> ') if event_date_label else ''}{venue_name}</h2>
                     {('<span class="applicant-badge">👥 ' + fmt_number(data['campaigns'][0].get('applicants', 0)) + '명</span>') if data['campaigns'] and data['campaigns'][0].get('applicants') else ''}
                 </div>
                 <div class="region-summary">
@@ -670,8 +676,22 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   .chart-card h3 {{ font-size: 14px; font-weight: 600; color: #606770; margin-bottom: 16px; }}
 
   .regions-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }}
-  .region-card {{ background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; transition: box-shadow 0.15s; }}
+  .region-card {{ background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; transition: box-shadow 0.15s; position: relative; }}
   .region-card:hover {{ box-shadow: 0 4px 16px rgba(0,0,0,0.13); }}
+  .card-close-btn {{ position:absolute; top:8px; right:8px; width:20px; height:20px; background:rgba(0,0,0,0.18); border:none; border-radius:50%; color:white; font-size:13px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; z-index:10; padding:0; }}
+  .card-close-btn:hover {{ background:rgba(0,0,0,0.45); }}
+  .hidden-bar {{ background:#fff3cd; border-bottom:1px solid #ffc107; padding:8px 32px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; color:#856404; }}
+  .hidden-chip {{ background:#ffc107; border:none; border-radius:12px; padding:3px 10px; font-size:12px; cursor:pointer; color:#333; font-weight:600; }}
+  .hidden-chip:hover {{ background:#e0a800; }}
+  .confirm-overlay {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:9000; align-items:center; justify-content:center; }}
+  .confirm-overlay.open {{ display:flex; }}
+  .confirm-box {{ background:white; border-radius:14px; padding:28px 32px; max-width:320px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.18); text-align:center; }}
+  .confirm-box p {{ font-size:15px; font-weight:600; color:#1C1E21; margin-bottom:20px; line-height:1.5; }}
+  .confirm-btns {{ display:flex; gap:10px; justify-content:center; }}
+  .confirm-ok {{ background:#1877F2; color:white; border:none; border-radius:8px; padding:10px 28px; font-size:14px; font-weight:700; cursor:pointer; }}
+  .confirm-ok:hover {{ background:#1464d8; }}
+  .confirm-cancel {{ background:#E4E6EB; color:#1C1E21; border:none; border-radius:8px; padding:10px 28px; font-size:14px; font-weight:600; cursor:pointer; }}
+  .confirm-cancel:hover {{ background:#d0d2d6; }}
   .card-detail-hint {{ text-align:right; font-size:12px; color:#1877F2; font-weight:600; padding:10px 20px; background:#F7F8FA; }}
 
   /* 모달 */
@@ -688,6 +708,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   .region-title {{ display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }}
   .region-dot {{ width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }}
   .region-title h2 {{ font-size: 18px; font-weight: 700; }}
+  .event-date-label {{ font-size: 18px; font-weight: 700; color: #1C1E21; margin-right: 4px; }}
   .camp-count {{ background: #E4E6EB; color: #606770; font-size: 12px; padding: 2px 10px; border-radius: 10px; }}
   .applicant-badge {{ background: #E8F4FD; color: #1877F2; font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 10px; }}
   .platform-table-wrap {{ padding: 12px 24px; border-bottom: 1px solid #E4E6EB; }}
@@ -934,6 +955,20 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
     </div>
   </div>
 
+  <div class="confirm-overlay" id="hideConfirmOverlay">
+    <div class="confirm-box">
+      <p>광고를 대시보드에서<br>끄시겠습니까?</p>
+      <div class="confirm-btns">
+        <button class="confirm-cancel" onclick="closeHideConfirm()">취소</button>
+        <button class="confirm-ok" id="hideConfirmOk">확인</button>
+      </div>
+    </div>
+  </div>
+  <div class="hidden-bar" id="hiddenBar" style="display:none">
+    <span>숨긴 행사:</span>
+    <div id="hiddenList" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    <span style="font-size:11px;color:#999;margin-left:4px">(클릭하면 다시 표시)</span>
+  </div>
   <div class="regions-grid" id="regionsGrid">{''.join(region_sections)}</div>
 
   <div class="charts-grid" style="margin-top:32px">
@@ -1044,7 +1079,7 @@ function downloadExcel(mode) {{
 
 // ── A작업: 업로드완료 캠페인 ACTIVE 전환 (백엔드 경유 → 노션 상태도 업데이트) ──
 async function activateCampaign(campaignId, pageId, btn) {{
-  if (!confirm('이 캠페인을 ACTIVE로 전환하시겠습니까?\n집행 시작 후 노션 상태가 "집행중"으로 변경됩니다.')) return;
+  if (!confirm('이 캠페인을 ACTIVE로 전환하시겠습니까? 집행 시작 후 노션 상태가 "집행중"으로 변경됩니다.')) return;
   btn.disabled = true;
   btn.textContent = '처리 중...';
   try {{
@@ -1317,6 +1352,61 @@ new Chart(document.getElementById('ctrChart'), {{
     }}
   }}
 }});
+
+// ── 카드 숨기기 / 복원 ──────────────────────────────────────────
+let _pendingHideKey = null;
+
+function hideCard(regionKey, event) {{
+  event.stopPropagation();
+  event.preventDefault();
+  _pendingHideKey = regionKey;
+  document.getElementById('hideConfirmOverlay').classList.add('open');
+  document.getElementById('hideConfirmOk').onclick = function() {{
+    closeHideConfirm();
+    const card = document.getElementById('card-' + _pendingHideKey);
+    if (!card) return;
+    card.style.display = 'none';
+    const saved = JSON.parse(localStorage.getItem('hiddenCards') || '{{}}');
+    saved[_pendingHideKey] = card.dataset.label || _pendingHideKey;
+    localStorage.setItem('hiddenCards', JSON.stringify(saved));
+    renderHiddenBar();
+  }};
+}}
+
+function closeHideConfirm() {{
+  document.getElementById('hideConfirmOverlay').classList.remove('open');
+  _pendingHideKey = null;
+}}
+
+function showCard(regionKey) {{
+  const card = document.getElementById('card-' + regionKey);
+  if (card) card.style.display = '';
+  const saved = JSON.parse(localStorage.getItem('hiddenCards') || '{{}}');
+  delete saved[regionKey];
+  localStorage.setItem('hiddenCards', JSON.stringify(saved));
+  renderHiddenBar();
+}}
+
+function renderHiddenBar() {{
+  const saved = JSON.parse(localStorage.getItem('hiddenCards') || '{{}}');
+  const bar = document.getElementById('hiddenBar');
+  const list = document.getElementById('hiddenList');
+  const keys = Object.keys(saved);
+  if (keys.length === 0) {{ bar.style.display = 'none'; return; }}
+  bar.style.display = '';
+  list.innerHTML = keys.map(k =>
+    `<button class="hidden-chip" onclick="showCard('${{k}}')">${{saved[k]}} ✕</button>`
+  ).join('');
+}}
+
+(function initHiddenCards() {{
+  const saved = JSON.parse(localStorage.getItem('hiddenCards') || '{{}}');
+  Object.keys(saved).forEach(k => {{
+    const card = document.getElementById('card-' + k);
+    if (card) card.style.display = 'none';
+  }});
+  renderHiddenBar();
+}})();
 </script>
 
 </body>

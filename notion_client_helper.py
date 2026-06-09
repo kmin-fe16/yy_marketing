@@ -91,10 +91,16 @@ def get_seat_by_date() -> tuple:
         venues = {}
         for page in all_pages:
             props = page["properties"]
-            date_val = props.get("날짜", {}).get("date")
-            if not date_val:
+            date_prop = props.get("공연날짜", {})
+            if date_prop.get("type") == "rollup":
+                arr = date_prop.get("rollup", {}).get("array", [])
+                date_start = next((i["date"]["start"] for i in arr if i.get("type") == "date" and i.get("date")), None)
+            else:
+                dv = date_prop.get("date")
+                date_start = dv["start"] if dv else None
+            if not date_start:
                 continue
-            d = datetime.fromisoformat(date_val["start"])
+            d = datetime.fromisoformat(date_start)
             key = (d.month, d.day)
 
             seat_arr = props.get("좌석수", {}).get("rollup", {}).get("array", [])
@@ -196,8 +202,6 @@ def parse_campaign(page: dict) -> dict:
         "차수": select_val("차수") or "1차",
         "광고시작일": date_val("광고시작일"),
         "일예산": number("일예산"),
-        "연령대": multi_select("다중 선택"),
-        "성별": select_val("선택") or "여성",
         "광고제목A": text("A 제목"),
         "광고제목B": text("B 제목"),
         "광고제목C": text("C 제목"),

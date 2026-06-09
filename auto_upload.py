@@ -86,6 +86,7 @@ def create_adset(campaign_id: str, info: dict) -> str:
             "billing_event": "IMPRESSIONS",
             "optimization_goal": "LINK_CLICKS",
             "targeting": targeting,
+            "multi_advertiser_eligibility": "INELIGIBLE",
             "status": "PAUSED",
         },
         timeout=15,
@@ -111,6 +112,7 @@ def create_ad(adset_id: str, info: dict, asset_url: str, label: str) -> str:
                     "call_to_action": {"type": "LEARN_MORE", "value": {"link": info["랜딩URL"]}},
                 },
             },
+            "multi_advertiser_eligibility": "INELIGIBLE",
         },
         timeout=15,
     )

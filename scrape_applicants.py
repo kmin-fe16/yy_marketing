@@ -27,12 +27,12 @@ def login():
 
 
 def get_active_events(session):
-    """event_input 목록에서 반영=Y인 행사명 추출."""
+    """event_input 전체 목록에서 행사명 추출 (반영 상태 무관)."""
     events = []
     page = 1
     while True:
         resp = session.get(
-            f"{ADMIN_URL}/event_input/index.asp?search_view=Y&page={page}",
+            f"{ADMIN_URL}/event_input/index.asp?page={page}",
             headers=HEADERS, timeout=15,
         )
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -43,11 +43,9 @@ def get_active_events(session):
             if not rows:
                 continue
             headers = [td.get_text(strip=True) for td in rows[0].find_all(["th", "td"])]
-            # 깔끔한 헤더 테이블: 첫 셀이 "번호"이고 "행사명" 포함
             if headers[0] != "번호" or "행사명" not in headers:
                 continue
             idx_name = headers.index("행사명")
-            idx_view = headers.index("반영") if "반영" in headers else None
             for tr in rows[1:]:
                 cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
                 if len(cells) <= idx_name:
@@ -60,7 +58,7 @@ def get_active_events(session):
         if not found:
             break
 
-        next_link = soup.find("a", string=re.compile(r"다음|next", re.I))
+        next_link = soup.find("a", href=re.compile(r"page=" + str(page + 1)))
         if not next_link:
             break
         page += 1
