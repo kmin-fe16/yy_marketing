@@ -141,11 +141,11 @@ def parse_campaign(page: dict) -> dict:
 
     def text(key):
         items = props.get(key, {}).get("rich_text", [])
-        return items[0]["plain_text"] if items else ""
+        return "".join(i["plain_text"] for i in items)
 
     def title(key):
         items = props.get(key, {}).get("title", [])
-        return items[0]["plain_text"] if items else ""
+        return "".join(i["plain_text"] for i in items)
 
     def date_val(key):
         d = props.get(key, {}).get("date")
@@ -212,7 +212,35 @@ def parse_campaign(page: dict) -> dict:
         "에셋B": url_val("에셋B_url"),
         "에셋C": url_val("에셋C_url"),
         "랜딩URL": url_val("랜딩URL"),
+        "잠재폼id": text("잠재폼id"),
         "상태": select_val("상태"),
         "캠페인ID": text("Meta 캠페인 ID"),
         "광고세트ID": text("Meta 광고세팅 ID"),
     }
+
+
+def find_latest_settings(공연명: str, 공연날짜: str = None):
+    """동일 공연날짜에서 가장 최근 업로드완료된 비-잠재 row의 세팅값 반환."""
+    if not 공연날짜:
+        return None
+
+    filters = [
+        {"property": "공연날짜", "rollup": {"any": {"date": {"equals": 공연날짜}}}},
+        {"property": "상태", "select": {"equals": "업로드완료"}},
+        {"property": "차수", "select": {"does_not_equal": "잠재"}},
+    ]
+    resp = requests.post(
+        f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
+        headers=HEADERS,
+        json={
+            "filter": {"and": filters},
+            "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+            "page_size": 1,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+    if not results:
+        return None
+    return parse_campaign(results[0])

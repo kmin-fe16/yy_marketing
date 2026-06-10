@@ -2,6 +2,7 @@ import os
 import json as _json
 import queue as _queue
 import threading
+import importlib
 import requests as req
 from flask import Flask, request, redirect, send_file, jsonify, Response, stream_with_context, make_response
 
@@ -43,6 +44,9 @@ def refresh():
 def notion_upload():
     results = []
     try:
+        import notion_client_helper, create_campaign
+        importlib.reload(notion_client_helper)
+        importlib.reload(create_campaign)
         from notion_client_helper import query_campaigns as _qc, parse_campaign as _parse
         from create_campaign import process as _upload
         pending_pages = _qc(filter_status="대기")
@@ -68,6 +72,9 @@ def notion_sync_sse():
 
         def run():
             try:
+                import notion_client_helper, create_campaign
+                importlib.reload(notion_client_helper)
+                importlib.reload(create_campaign)
                 from notion_client_helper import query_campaigns as _qc, parse_campaign as _parse
                 from create_campaign import process as _upload
 
@@ -131,6 +138,9 @@ def ad_setup():
 @app.route("/ad-setup/run/<page_id>", methods=["POST"])
 def ad_setup_run(page_id):
     try:
+        import notion_client_helper, create_campaign
+        importlib.reload(notion_client_helper)
+        importlib.reload(create_campaign)
         from create_campaign import process
         import requests as req
         from notion_client_helper import query_campaigns, parse_campaign
