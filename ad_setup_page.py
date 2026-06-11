@@ -1,9 +1,14 @@
 """메타광고세팅 페이지 — Notion 메타 광고 오토세팅 DB 뷰어 + 업로드 실행."""
 import os
 import re
+import json
 import requests
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from notion_client_helper import parse_campaign
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_LOG_FILE = os.path.join(BASE_DIR, "logs", "upload_log.json")
 
 load_dotenv()
 
@@ -161,47 +166,103 @@ def _camp_card(p: dict) -> str:
 </div>"""
 
 
-def build_ad_setup_html() -> str:
-    notion_error = None
-    all_camps = []
+def _load_upload_log() -> list:
     try:
-        pages = _fetch_all()
-        all_camps = [parse_campaign(p) for p in pages]
-    except Exception as e:
-        notion_error = str(e)
+        with open(UPLOAD_LOG_FILE, encoding="utf-8") as f:
+            return json.load(f)[:30]
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
-    groups: dict = {s: [] for s in STATUS_ORDER}
-    for c in all_camps:
-        groups.setdefault(c.get("상태") or "대기", []).append(c)
 
-    if notion_error:
-        body_html = f'<div class="error-box">⚠️ Notion 연결 오류: {notion_error}</div>'
-    elif not all_camps:
-        body_html = '<div class="empty-state">노션 DB에 등록된 캠페인이 없습니다.</div>'
-    else:
-        body_html = ""
-        all_statuses = STATUS_ORDER + [s for s in groups if s not in STATUS_ORDER and groups[s]]
-        for status in all_statuses:
-            camps = groups.get(status, [])
-            if not camps:
-                continue
-            color = STATUS_COLOR.get(status, "#606770")
-            bg = STATUS_BG.get(status, "#F0F2F5")
-            icon = STATUS_ICON.get(status, "")
-            body_html += f"""<div class="section">
-  <div class="section-head">
-    <span class="status-chip" style="background:{bg};color:{color};font-size:13px;padding:4px 14px;">{icon} {status}</span>
-    <span class="section-count">{len(camps)}건</span>
+def _upload_log_html(entries: list) -> str:
+    def thumbs_html(e):
+        imgs = []
+        for label in ["A", "B", "C"]:
+            url = e.get(f"에셋{label}", "")
+            thumb = _drive_thumb(url)
+            if thumb:
+                imgs.append(f'<a href="{url}" target="_blank"><img src="{thumb}" class="ulog-thumb" onerror="this.closest(\'a\').style.display=\'none\'"></a>')
+        return "".join(imgs)
+
+    def row(e, idx):
+        camp_name = e.get("캠페인명") or e.get("공연명", "")
+        차수 = e.get("차수", "")
+        active = e.get("active", False)
+        cid = e.get("캠페인ID", "") or str(idx)
+        checked = "checked" if active else ""
+        status = e.get("status", "성공")
+        status_cls = "success" if status == "성공" else "fail"
+
+        # 48시간 기준일
+        try:
+            dt = datetime.strptime(e.get("uploaded_at", ""), "%Y-%m-%d %H:%M")
+            h48_dt = (dt + timedelta(hours=48)).strftime("%m/%d %H:%M")
+            h48_date_only = (dt + timedelta(hours=48)).strftime("%m/%d")
+        except Exception:
+            h48_dt = "-"
+            h48_date_only = "-"
+
+        h48_asset = e.get("h48_asset", "")
+        h48_off = e.get("h48_off_done", False)
+        off_checked = "checked" if h48_off else ""
+
+        th = thumbs_html(e)
+        left_html = f'<div class="ulog-left">{th}</div>'
+
+        since_date = e.get("uploaded_at", "")[:10]
+
+        # 에셋 A/B/C 썸네일 URL (JS에서 active-asset API 결과에 따라 선택)
+        thumb_a = _drive_thumb(e.get("에셋A", "") or "")
+        thumb_b = _drive_thumb(e.get("에셋B", "") or "")
+        thumb_c = _drive_thumb(e.get("에셋C", "") or "")
+
+        right_html = f"""<div class="ulog-right">
+          <div class="h48-asset-preview" id="asset-{idx}"></div>
+          <div class="ulog-metrics" id="metrics-{idx}"></div>
+        </div>"""
+
+        expand_section = f"""<div class="ulog-expand" id="expand-{idx}" data-thumb-a="{thumb_a}" data-thumb-b="{thumb_b}" data-thumb-c="{thumb_c}">
+          {left_html}
+          <div class="ulog-divider"></div>
+          {right_html}
+        </div>"""
+
+        h48_compact = f"""<div class="h48-compact" onclick="event.stopPropagation()">
+          <label class="ulog-toggle">
+            <input type="checkbox" {off_checked} onchange="update48Off(this,'{cid}')">
+            <span class="ulog-slider"></span>
+          </label>
+          <span class="h48-compact-date">{h48_date_only}</span>
+        </div>"""
+
+        return f"""<div class="ulog-row {status_cls} ulog-expandable" onclick="toggleExpand('expand-{idx}')" data-cid="{cid}" data-since="{since_date}">
+      <div class="ulog-main">
+        <span class="ulog-time">{e.get("uploaded_at","")[5:10].replace("-","/")}</span>
+        <label class="ulog-toggle" onclick="event.stopPropagation()">
+          <input type="checkbox" {checked} onchange="updateActive(this,'{cid}')">
+          <span class="ulog-slider"></span>
+        </label>
+        <span class="ulog-title">{camp_name}</span>
+        <span class="ulog-order">{차수}</span>
+        {h48_compact}
+      </div>
+      {expand_section}
+    </div>"""
+
+    rows = "".join(row(e, i) for i, e in enumerate(entries))
+    count_html = f'<span class="ulog-count">{len(entries)}건</span>' if entries else ''
+    empty_html = '' if entries else '<div class="ulog-empty">업로드 이력 없음</div>'
+    return f"""<div class="upload-log-block">
+  <div class="upload-log-header">
+    <span class="ulog-label">업로드 이력</span>
+    {count_html}
   </div>
-  {"".join(_camp_card(c) for c in camps)}
+  <div class="ulog-list">{rows}{empty_html}</div>
 </div>"""
 
-    total = len(all_camps)
-    summary = "".join(
-        f'<span style="background:{STATUS_BG[s]};color:{STATUS_COLOR[s]};padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700;">'
-        f'{STATUS_ICON[s]} {s} {len(groups.get(s,[]))}건</span>'
-        for s in STATUS_ORDER if groups.get(s)
-    )
+
+def build_ad_setup_html() -> str:
+    upload_log_section = _upload_log_html(_load_upload_log())
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -326,6 +387,66 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
               padding: 16px 20px; color: #B71C1C; }}
 .empty-state {{ text-align: center; padding: 60px 20px; color: #90949C; font-size: 15px; }}
 
+/* ── 업로드 이력 ── */
+.upload-log-block {{ background: white; border-radius: 12px; padding: 16px 20px;
+                     box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 20px; }}
+.upload-log-header {{ display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }}
+.ulog-label {{ background: #1877F2; color: white; font-size: 12px; font-weight: 700;
+               padding: 3px 10px; border-radius: 12px; }}
+.ulog-count {{ font-size: 12px; color: #606770; }}
+.ulog-list {{ display: flex; flex-direction: column; gap: 6px; }}
+.ulog-row {{ background: #F7F8FA; border-radius: 8px; overflow: hidden; border-left: 3px solid transparent; }}
+.ulog-row.success {{ background: #F0FBF3; border-left-color: #34A853; }}
+.ulog-row.fail {{ background: #F7F8FA; border-left-color: #BCC0C4; }}
+.ulog-expandable {{ cursor: pointer; }}
+.ulog-expandable:hover .ulog-main {{ background: #ECEEF1; }}
+.ulog-row.success.ulog-expandable:hover .ulog-main {{ background: #D8F3DF; }}
+.ulog-main {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; flex-wrap: wrap; }}
+.ulog-time {{ font-size: 11px; color: #90949C; white-space: nowrap; min-width: 115px; }}
+.ulog-title {{ font-size: 13px; font-weight: 800; color: #1C1E21; flex: 1; }}
+.ulog-order {{ font-size: 11px; color: #90949C; white-space: nowrap; }}
+.ulog-empty {{ font-size: 13px; color: #BCC0C4; padding: 14px; text-align: center; }}
+/* expand 패널 */
+.ulog-expand {{ display: none; border-top: 1px solid #E4E6EB; }}
+.ulog-expand.open {{ display: flex; align-items: stretch; }}
+.ulog-left {{ display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px;
+              align-content: flex-start; min-width: 180px; flex: 1; }}
+.ulog-divider {{ width: 1px; background: #E4E6EB; flex-shrink: 0; }}
+.ulog-right {{ flex: 1; padding: 12px 16px; display: flex; flex-direction: column;
+               gap: 10px; min-width: 260px; }}
+.ulog-thumb {{ width: 72px; height: 72px; object-fit: cover; border-radius: 6px;
+               background: #E4E6EB; cursor: pointer; }}
+.h48-selected-img {{ width: 90px; height: 90px; object-fit: cover; border-radius: 8px;
+                     border: 2px solid #1877F2; }}
+.h48-no-asset {{ width: 0; height: 0; }}
+.h48-asset-preview {{ display: flex; flex-direction: column; align-items: center; gap: 4px; }}
+.h48-asset-label {{ font-size: 11px; color: #1877F2; font-weight: 600; }}
+/* 마케팅 지표 */
+.ulog-metrics {{ width: 100%; }}
+.metrics-range {{ font-size: 11px; color: #90949C; margin-bottom: 8px; }}
+.metrics-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }}
+.metric-item {{ display: flex; flex-direction: column; align-items: center;
+                background: #F7F8FA; border-radius: 6px; padding: 7px 4px; }}
+.metric-val {{ font-size: 13px; font-weight: 700; color: #1C1E21; }}
+.metric-label {{ font-size: 10px; color: #90949C; margin-top: 2px; }}
+.metrics-loading {{ font-size: 12px; color: #BCC0C4; padding: 8px 0; }}
+.metrics-err {{ font-size: 11px; color: #D32F2F; padding: 8px 0; }}
+/* 막대바 내 compact 48h */
+.h48-compact {{ display: flex; align-items: center; gap: 8px; padding: 0 10px;
+               border-left: 1px solid #E4E6EB; border-right: 1px solid #E4E6EB; }}
+.h48-compact-date {{ font-size: 11px; color: #90949C; white-space: nowrap; font-weight: 700; }}
+/* on/off 토글 */
+.ulog-toggle {{ position: relative; display: inline-block; width: 40px; height: 22px;
+                flex-shrink: 0; margin-left: auto; }}
+.ulog-toggle input {{ opacity: 0; width: 0; height: 0; }}
+.ulog-slider {{ position: absolute; cursor: pointer; inset: 0; background: #CCC;
+                border-radius: 22px; transition: .25s; }}
+.ulog-slider::before {{ content: ""; position: absolute; width: 16px; height: 16px;
+                         left: 3px; bottom: 3px; background: white; border-radius: 50%;
+                         transition: .25s; }}
+.ulog-toggle input:checked + .ulog-slider {{ background: #137333; }}
+.ulog-toggle input:checked + .ulog-slider::before {{ transform: translateX(18px); }}
+
 /* ── 노션동기화 버튼 ── */
 .sync-btn {{ background: #5B5FEF; color: white; border: none; padding: 7px 16px;
              border-radius: 20px; font-size: 13px; font-weight: 700; cursor: pointer; }}
@@ -371,16 +492,88 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 </div>
 
 <div class="wrap">
-  <div class="summary-bar">
-    <span class="total">총 {total}건</span>
-    {summary}
-    <span style="margin-left:auto;font-size:11px;color:#90949C;">Notion: 메타 광고 오토세팅 DB</span>
-  </div>
-
-  {body_html}
+  {upload_log_section}
 </div>
 
 <script>
+function toggleExpand(id) {{
+  const el = document.getElementById(id);
+  if (!el) return;
+  const isOpening = !el.classList.contains('open');
+  el.classList.toggle('open');
+  if (isOpening) {{
+    const row = el.closest('[data-cid]');
+    if (row) {{
+      const idx = id.replace('expand-', '');
+      loadMetrics(idx, row.dataset.cid, row.dataset.since);
+      loadActiveAsset(idx, row.dataset.cid, el);
+    }}
+  }}
+}}
+
+async function loadActiveAsset(idx, cid, expandEl) {{
+  const el = document.getElementById('asset-' + idx);
+  if (!el || el.dataset.loaded === 'true' || !cid) return;
+  try {{
+    const resp = await fetch(`/api/active-asset?campaign_id=${{cid}}`);
+    const d = await resp.json();
+    if (!d.asset) {{ el.innerHTML = ''; return; }}
+    const thumb = expandEl.getAttribute('data-thumb-' + d.asset.toLowerCase()) || '';
+    if (!thumb) {{ el.innerHTML = ''; return; }}
+    el.innerHTML = `<img src="${{thumb}}" class="h48-selected-img" onerror="this.style.display='none'"><div class="h48-asset-label">에셋 ${{d.asset}}</div>`;
+    el.dataset.loaded = 'true';
+  }} catch(e) {{
+    el.innerHTML = '';
+  }}
+}}
+
+async function loadMetrics(idx, cid, since) {{
+  const el = document.getElementById('metrics-' + idx);
+  if (!el || el.dataset.loaded === 'true' || !cid) return;
+  el.innerHTML = '<div class="metrics-loading">지표 로딩 중...</div>';
+  try {{
+    const resp = await fetch(`/api/campaign-insights?campaign_id=${{cid}}&since=${{since}}`);
+    const d = await resp.json();
+    if (d.error || Object.keys(d).length === 0) {{
+      el.innerHTML = '<div class="metrics-err">데이터 없음</div>';
+      return;
+    }}
+    const fmt = v => v ? Number(v).toLocaleString('ko-KR') : '-';
+    const fmtW = v => v ? '₩' + Math.round(v).toLocaleString('ko-KR') : '-';
+    const fmtP = v => v ? Number(v).toFixed(2) + '%' : '-';
+    el.innerHTML = `
+      <div class="metrics-range">${{since}} ~ 오늘</div>
+      <div class="metrics-grid">
+        <div class="metric-item"><span class="metric-val">${{fmt(d.impressions)}}</span><span class="metric-label">노출</span></div>
+        <div class="metric-item"><span class="metric-val">${{fmt(d.reach)}}</span><span class="metric-label">도달</span></div>
+        <div class="metric-item"><span class="metric-val">${{fmt(d.clicks)}}</span><span class="metric-label">클릭</span></div>
+        <div class="metric-item"><span class="metric-val">${{fmtP(d.ctr)}}</span><span class="metric-label">CTR</span></div>
+        <div class="metric-item"><span class="metric-val">${{fmtW(d.spend)}}</span><span class="metric-label">소진</span></div>
+        <div class="metric-item"><span class="metric-val">${{fmtW(d.cpc)}}</span><span class="metric-label">CPC</span></div>
+      </div>`;
+    el.dataset.loaded = 'true';
+  }} catch(e) {{
+    el.innerHTML = '<div class="metrics-err">오류 발생</div>';
+  }}
+}}
+
+async function updateActive(checkbox, campaignId) {{
+  const state = checkbox.checked;
+  await fetch('/api/upload-log/toggle', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{campaign_id: campaignId, active: state}})
+  }});
+}}
+
+async function update48Off(checkbox, cid) {{
+  await fetch('/api/upload-log/48h', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{campaign_id: cid, h48_off_done: checkbox.checked}})
+  }});
+}}
+
 function onImgErr(img) {{
   const wrap = img.closest('.asset-img-wrap');
   if (wrap) wrap.innerHTML = '<div class="asset-img-empty"><span class="img-empty-icon">🖼</span><span>미리보기 불가</span></div>';
