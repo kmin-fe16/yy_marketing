@@ -246,7 +246,7 @@ async function approveCampaign(id, btn) {{
 </html>"""
 
 
-def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, pending_campaigns=None, dry_run_alerts=None, upload_complete=None, pending_upload=None):
+def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, pending_campaigns=None, dry_run_alerts=None, upload_complete=None, pending_upload=None, upload_log=None):
     colors = ["#4F86C6", "#E07B54", "#5BAD6F", "#9B5EA2", "#D4A843",
               "#E05C87", "#43A8A8", "#8B7355", "#6B7A8D", "#C96B6B"]
 
@@ -362,11 +362,48 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
     <span class="task-empty-msg">현재 48시간 이상 경과한 에셋 없음</span>
   </div>"""
 
+    # ── 업로드 이력 섹션 ─────────────────────────────────────────────
+    log_entries = (upload_log or [])[:30]
+
+    def log_row(entry):
+        titles = " / ".join(filter(None, [
+            entry.get("광고제목A", ""),
+            entry.get("광고제목B", ""),
+            entry.get("광고제목C", ""),
+        ])) or "제목 없음"
+        차수 = entry.get("차수", "")
+        차수_colors = {
+            "1차": "#1877F2", "2차": "#E65100", "3차": "#137333",
+            "4차": "#9B5EA2", "5차": "#D4A843", "영상": "#E05C87", "잠재": "#43A8A8",
+        }
+        chip_color = 차수_colors.get(차수, "#606770")
+        return f"""<div class="ulog-row">
+      <span class="ulog-time">{entry.get("uploaded_at","")}</span>
+      <span class="ulog-name">{entry.get("공연명","")}</span>
+      <span class="ulog-chip" style="background:{chip_color}">{차수}</span>
+      <span class="ulog-title">{titles}</span>
+    </div>"""
+
+    if log_entries:
+        log_rows_html = "".join(log_row(e) for e in log_entries)
+        upload_log_html = f"""
+  <div class="upload-log-block">
+    <div class="upload-log-header">
+      <span class="task-label" style="background:#1877F2;color:white;">업로드 이력</span>
+      <span class="task-title-text">Meta에 올라간 광고</span>
+      <span class="task-badge" style="background:#E7F3FF;color:#1877F2;">{len(log_entries)}건</span>
+    </div>
+    <div class="ulog-list">{log_rows_html}</div>
+  </div>"""
+    else:
+        upload_log_html = ""
+
     workflow_section_html = f"""
   <div class="workflow-container">
 {notif_block_html}
 {a_task_html}
 {b_task_html}
+{upload_log_html}
   </div>"""
 
     region_list = list(regions_data.keys())
@@ -798,6 +835,16 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
   .alarm-all-btn {{ background: #E65100; color: white; border: none; padding: 7px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; }}
   .alarm-all-btn:hover {{ background: #BF360C; }}
 
+  /* 업로드 이력 */
+  .upload-log-block {{ background: white; border-radius: 12px; padding: 16px 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 12px; }}
+  .upload-log-header {{ display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }}
+  .ulog-list {{ display: flex; flex-direction: column; gap: 6px; }}
+  .ulog-row {{ display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #F7F8FA; border-radius: 8px; flex-wrap: wrap; }}
+  .ulog-time {{ font-size: 11px; color: #90949C; white-space: nowrap; min-width: 110px; }}
+  .ulog-name {{ font-size: 13px; font-weight: 700; color: #1C1E21; min-width: 120px; }}
+  .ulog-chip {{ font-size: 11px; font-weight: 700; color: white; padding: 2px 8px; border-radius: 12px; white-space: nowrap; }}
+  .ulog-title {{ font-size: 12px; color: #444; flex: 1; }}
+
   /* 크리에이티브 이미지 스트립 */
   .creative-strip {{ display: flex; gap: 14px; padding: 16px 24px; border-bottom: 1px solid #E4E6EB; flex-wrap: wrap; align-items: flex-start; background: #FAFBFC; }}
   .creative-item {{ display: flex; flex-direction: column; align-items: center; gap: 6px; }}
@@ -868,6 +915,7 @@ def build_html(regions_data, totals, ads_by_campaign, platform_by_region=None, p
     <div class="date-badge">활성 캠페인 {totals['active_count']}개</div>
     <a href="approval.html" target="_blank" class="approval-link">📋 승인 대기</a>
     <a href="/ad-setup" class="approval-link" style="background:#E7F3FF;color:#1877F2;">⚙️ 메타광고세팅</a>
+    <a href="/leads" class="approval-link" style="background:#E8F5E9;color:#137333;">👥 잠재고객</a>
     <button class="excel-btn" onclick="downloadExcel('event')">📥 행사별</button>
     <button class="excel-btn" onclick="downloadExcel('week')">📥 주차별</button>
     <button class="excel-btn" onclick="downloadExcel('month')">📥 월간</button>
@@ -1618,8 +1666,18 @@ def main():
         print(f"  → 노션 업로드완료 조회 실패: {e}")
         upload_complete_campaigns = []
 
+    # 업로드 이력 로그 읽기
+    upload_log = []
+    upload_log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "upload_log.json")
+    try:
+        with open(upload_log_file, encoding="utf-8") as f:
+            upload_log = json.load(f)
+        print(f"  → 업로드 이력 {len(upload_log)}건")
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
     print("\nHTML 대시보드 생성 중...")
-    html = build_html(sorted_regions, totals, dict(ads_by_campaign), dict(platform_by_region), dry_run_alerts=dry_run_alerts, upload_complete=upload_complete_campaigns, pending_upload=pending_upload_campaigns)
+    html = build_html(sorted_regions, totals, dict(ads_by_campaign), dict(platform_by_region), dry_run_alerts=dry_run_alerts, upload_complete=upload_complete_campaigns, pending_upload=pending_upload_campaigns, upload_log=upload_log)
 
     with open("dashboard.html", "w", encoding="utf-8") as f:
         f.write(html)

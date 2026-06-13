@@ -15,7 +15,7 @@ cat > "$PLIST_PATH" << 'EOF'
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/km/Desktop/meta-automation/generate_dashboard.py</string>
+        <string>/Users/km/Desktop/meta-automation/scheduler.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/km/Desktop/meta-automation</string>

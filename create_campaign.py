@@ -5,6 +5,7 @@
 """
 import os
 import re
+import json
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
@@ -27,6 +28,32 @@ NOTION_HEADERS = {
 
 BUDGET_TRAFFIC = 35_000   # 트래픽 일예산 (원)
 BUDGET_LEAD    = 20_000   # 잠재고객 일예산 (원)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_LOG_FILE = os.path.join(BASE_DIR, "logs", "upload_log.json")
+
+
+def _log_upload(info: dict, campaign_id: str):
+    os.makedirs(os.path.dirname(UPLOAD_LOG_FILE), exist_ok=True)
+    try:
+        with open(UPLOAD_LOG_FILE, encoding="utf-8") as f:
+            log = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        log = []
+    log.insert(0, {
+        "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "캠페인명": build_camp_name(info),
+        "차수": info.get("차수", ""),
+        "공연명": info.get("공연명", ""),
+        "에셋A": info.get("에셋A", ""),
+        "에셋B": info.get("에셋B", ""),
+        "에셋C": info.get("에셋C", ""),
+        "캠페인ID": campaign_id,
+        "status": "성공",
+        "active": False,
+    })
+    with open(UPLOAD_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(log[:200], f, ensure_ascii=False, indent=2)
 
 _page_id_cache = None
 
@@ -615,6 +642,7 @@ def _process_traffic(info: dict, emit):
             pass
         raise
 
+    _log_upload(info, cid)
     send_message(
         f"🎭 <b>[{camp_name}] 캠페인 생성 완료</b>\n\n"
         f"📍 장소: {info['공연장소']}\n"
@@ -682,6 +710,7 @@ def _process_lead(info: dict, emit):
             pass
         raise
 
+    _log_upload(info, cid)
     send_message(
         f"📋 <b>[{camp_name}] 잠재고객 캠페인 생성 완료</b>\n\n"
         f"📍 장소: {info['공연장소']}\n"

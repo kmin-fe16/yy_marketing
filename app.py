@@ -1,3 +1,4 @@
+import io
 import os
 import json as _json
 import queue as _queue
@@ -8,6 +9,7 @@ from flask import Flask, request, redirect, send_file, jsonify, Response, stream
 
 import generate_dashboard
 import ad_setup_page
+import leads_page
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -366,6 +368,41 @@ def campaign_insights():
         )
         data = r.json().get("data", [])
         return jsonify(data[0] if data else {})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/leads")
+def leads():
+    importlib.reload(leads_page)
+    html = leads_page.build_leads_html()
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/api/leads")
+def api_leads():
+    try:
+        importlib.reload(leads_page)
+        data = leads_page.fetch_all_leads()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/leads/download")
+def api_leads_download():
+    try:
+        importlib.reload(leads_page)
+        data = leads_page.fetch_all_leads()
+        excel_bytes = leads_page.generate_excel(data)
+        from datetime import date as _d
+        fname = f"잠재고객_{_d.today().isoformat()}.xlsx"
+        return send_file(
+            io.BytesIO(excel_bytes),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=fname,
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
